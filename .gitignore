@@ -1,0 +1,20 @@
+# SSL certificates (auto-generated)
+/certs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Uploads
+/uploads/*.wav
+/uploads/*.webm
+
+# Voice Profiles
+/profiles/
+
+# IDE
+.idea/
+.vscode/
+*.swp

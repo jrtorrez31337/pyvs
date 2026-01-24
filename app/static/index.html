@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qwen3-TTS Studio</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://unpkg.com/wavesurfer.js@7"></script>
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <h1>Qwen3-TTS Studio</h1>
+            <div id="gpu-status" class="gpu-status">Loading...</div>
+        </header>
+
+        <div class="main-container">
+            <nav class="sidebar">
+                <div class="nav-section">
+                    <h3>MODES</h3>
+                    <button class="nav-btn active" data-mode="stt">
+                        <span class="icon">🎤</span> Speech to Text
+                    </button>
+                    <button class="nav-btn" data-mode="clone">
+                        <span class="icon">🎭</span> Voice Clone
+                    </button>
+                    <button class="nav-btn" data-mode="custom">
+                        <span class="icon">👤</span> Custom Voice
+                    </button>
+                    <button class="nav-btn" data-mode="design">
+                        <span class="icon">✨</span> Voice Design
+                    </button>
+                </div>
+                <div class="nav-section history-section">
+                    <h3>HISTORY</h3>
+                    <div id="history-list" class="history-list"></div>
+                    <button id="clear-history-btn" class="secondary-btn small">Clear All</button>
+                </div>
+            </nav>
+
+            <main class="workspace">
+                <!-- STT Mode -->
+                <div id="stt-panel" class="mode-panel active">
+                    <h2>Speech to Text</h2>
+                    <p class="description">Record audio using your microphone to transcribe speech to text.</p>
+
+                    <div class="mic-container">
+                        <button id="mic-btn" class="mic-btn">
+                            <span class="mic-icon">🎤</span>
+                            <span class="mic-text">Click to Record</span>
+                        </button>
+                        <div id="recording-indicator" class="recording-indicator hidden">
+                            <span class="pulse"></span> Recording...
+                        </div>
+                        <label class="toggle-option">
+                            <input type="checkbox" id="stt-denoise" checked>
+                            <span>Noise Reduction</span>
+                        </label>
+                    </div>
+
+                    <div class="transcription-result">
+                        <label>Transcribed Text:</label>
+                        <textarea id="stt-result" readonly placeholder="Transcription will appear here..."></textarea>
+                        <button id="use-text-btn" class="secondary-btn" disabled>Use in TTS →</button>
+                    </div>
+                </div>
+
+                <!-- Voice Clone Mode -->
+                <div id="clone-panel" class="mode-panel">
+                    <h2>Voice Clone</h2>
+                    <p class="description">Clone a voice from audio samples. Add multiple samples for better quality.</p>
+
+                    <div class="form-group profile-section">
+                        <label>Voice Profile:</label>
+                        <div class="profile-controls">
+                            <select id="profile-select">
+                                <option value="">-- New Profile --</option>
+                            </select>
+                            <button id="profile-load-btn" class="profile-btn" disabled>Load</button>
+                            <button id="profile-save-btn" class="profile-btn" disabled>Save</button>
+                            <button id="profile-export-btn" class="profile-btn" disabled>Export</button>
+                            <button id="profile-delete-btn" class="profile-btn danger" disabled>Delete</button>
+                        </div>
+                        <div class="profile-import">
+                            <input type="file" id="profile-import-input" accept=".zip" hidden>
+                            <button id="profile-import-btn" class="profile-btn">Import Profile</button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Reference Audio Samples:</label>
+                        <div id="clone-samples-list" class="samples-list"></div>
+                        <div class="add-sample-section">
+                            <div class="audio-source-options">
+                                <button id="clone-upload-btn" class="source-btn active" data-source="upload">Upload File</button>
+                                <button id="clone-record-btn" class="source-btn" data-source="record">Record Mic</button>
+                            </div>
+                            <div id="clone-upload-zone" class="upload-zone">
+                                <input type="file" id="clone-audio-input" accept="audio/*" hidden>
+                                <p>Drop audio file or click to upload</p>
+                            </div>
+                            <div id="clone-record-zone" class="record-zone hidden">
+                                <button id="clone-mic-btn" class="clone-mic-btn">
+                                    <span class="mic-icon">🎤</span>
+                                    <span class="mic-status">Click to Record</span>
+                                </button>
+                                <div id="clone-recording-indicator" class="recording-indicator hidden">
+                                    <span class="pulse"></span><span class="status-text">Recording...</span>
+                                </div>
+                                <label class="toggle-option">
+                                    <input type="checkbox" id="clone-denoise" checked>
+                                    <span>Noise Reduction</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Language:</label>
+                            <select id="clone-language"></select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Text to Speak:</label>
+                        <textarea id="clone-text" placeholder="Enter the text you want to generate..."></textarea>
+                        <div class="text-counter">
+                            <span class="char-count">0</span> characters | <span class="word-count">0</span> words
+                        </div>
+                        <div class="batch-toggle">
+                            <label>
+                                <input type="checkbox" class="batch-mode-checkbox" data-mode="clone">
+                                Batch Mode (one text per line)
+                            </label>
+                        </div>
+                    </div>
+
+                    <button id="clone-generate-btn" class="generate-btn" disabled>Generate Speech</button>
+                </div>
+
+                <!-- Custom Voice Mode -->
+                <div id="custom-panel" class="mode-panel">
+                    <h2>Custom Voice</h2>
+                    <p class="description">Use preset voices with optional style/emotion control.</p>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Speaker:</label>
+                            <select id="custom-speaker"></select>
+                        </div>
+                        <div class="form-group">
+                            <label>Language:</label>
+                            <select id="custom-language"></select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Style Instruction (optional):</label>
+                        <input type="text" id="custom-instruct" placeholder="e.g., 'happy tone', 'speak slowly', 'with excitement'">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Text to Speak:</label>
+                        <textarea id="custom-text" placeholder="Enter the text you want to generate..."></textarea>
+                        <div class="text-counter">
+                            <span class="char-count">0</span> characters | <span class="word-count">0</span> words
+                        </div>
+                        <div class="batch-toggle">
+                            <label>
+                                <input type="checkbox" class="batch-mode-checkbox" data-mode="custom">
+                                Batch Mode (one text per line)
+                            </label>
+                        </div>
+                    </div>
+
+                    <button id="custom-generate-btn" class="generate-btn">Generate Speech</button>
+                </div>
+
+                <!-- Voice Design Mode -->
+                <div id="design-panel" class="mode-panel">
+                    <h2>Voice Design</h2>
+                    <p class="description">Create a custom voice from a natural language description.</p>
+
+                    <div class="form-group">
+                        <label>Voice Description:</label>
+                        <textarea id="design-instruct" placeholder="Describe the voice you want, e.g., 'Male, 30 years old, deep voice, calm and professional tone'"></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Language:</label>
+                        <select id="design-language"></select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Text to Speak:</label>
+                        <textarea id="design-text" placeholder="Enter the text you want to generate..."></textarea>
+                        <div class="text-counter">
+                            <span class="char-count">0</span> characters | <span class="word-count">0</span> words
+                        </div>
+                        <div class="batch-toggle">
+                            <label>
+                                <input type="checkbox" class="batch-mode-checkbox" data-mode="design">
+                                Batch Mode (one text per line)
+                            </label>
+                        </div>
+                    </div>
+
+                    <button id="design-generate-btn" class="generate-btn">Generate Speech</button>
+                </div>
+
+                <!-- Loading Overlay -->
+                <div id="loading-overlay" class="loading-overlay hidden">
+                    <div class="spinner"></div>
+                    <p>Generating speech...</p>
+                </div>
+
+                <!-- Trim Modal -->
+                <div id="trim-modal" class="modal hidden">
+                    <div class="modal-content">
+                        <h3>Trim Audio</h3>
+                        <div id="trim-waveform"></div>
+                        <div class="trim-controls">
+                            <div class="trim-input">
+                                <label>Start (s):</label>
+                                <input type="number" id="trim-start" min="0" step="0.1" value="0">
+                            </div>
+                            <div class="trim-input">
+                                <label>End (s):</label>
+                                <input type="number" id="trim-end" min="0" step="0.1" value="0">
+                            </div>
+                        </div>
+                        <div class="trim-actions">
+                            <button id="trim-preview-btn" class="secondary-btn">Preview</button>
+                            <button id="trim-save-btn" class="generate-btn">Save Trimmed</button>
+                            <button id="trim-cancel-btn" class="secondary-btn">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <footer class="audio-player-bar">
+            <div class="player-controls">
+                <button id="play-btn" class="play-btn" disabled>▶</button>
+                <div class="waveform-container">
+                    <div id="waveform"></div>
+                    <span id="time-display">0:00 / 0:00</span>
+                </div>
+                <button id="download-btn" class="download-btn" disabled>⬇ Download</button>
+            </div>
+            <audio id="output-audio" hidden></audio>
+        </footer>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
