@@ -11,10 +11,32 @@ A web application for text-to-speech synthesis and speech-to-text transcription 
 - **Web Interface**: Easy-to-use browser-based interface
 - **HTTPS Support**: Self-signed certificates for secure microphone access over LAN
 
-## Requirements
+## Hardware Requirements
+
+This is a multi-GPU application. Models are assigned to specific GPUs at startup:
+
+| GPU | Model | VRAM Required |
+|-----|-------|---------------|
+| GPU 0 | Qwen3-TTS (all 3 variants: Base, CustomVoice, VoiceDesign) | ~12 GB+ |
+| GPU 1 | Faster-Whisper medium | ~5 GB |
+
+**Minimum:**
+- 2x NVIDIA GPUs with CUDA support
+- GPU 0: 16 GB VRAM (e.g. RTX 4080, A4000)
+- GPU 1: 8 GB VRAM (e.g. RTX 3070, RTX 4060 Ti)
+- 32 GB system RAM
+- CUDA 12.4 compatible drivers
+
+**Recommended:**
+- 2x NVIDIA RTX A40 (48 GB) or equivalent
+- 64 GB system RAM
+
+> **Note:** Running with a single GPU is possible using `CUDA_VISIBLE_DEVICES` but TTS and STT cannot run concurrently and VRAM must accommodate all models (~17 GB+).
+
+## Software Requirements
 
 - Python 3.12
-- CUDA-capable GPU (recommended: 2 GPUs for running TTS and STT simultaneously)
+- CUDA 12.4+ toolkit and compatible NVIDIA drivers
 - [uv](https://github.com/astral-sh/uv) package manager
 
 ## Installation
