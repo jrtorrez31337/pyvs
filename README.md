@@ -4,12 +4,28 @@ A web application for text-to-speech synthesis and speech-to-text transcription 
 
 ## Features
 
-- **Text-to-Speech (TTS)**: Generate natural-sounding speech using Qwen3-TTS
-- **Speech-to-Text (STT)**: Transcribe audio using Faster-Whisper
-- **Voice Cloning**: Clone voices from audio samples
-- **Voice Profiles**: Save and manage custom voice profiles
-- **Web Interface**: Easy-to-use browser-based interface
-- **HTTPS Support**: Self-signed certificates for secure microphone access over LAN
+### Text-to-Speech
+- **Voice Cloning**: Clone any voice from short audio samples
+- **Custom Voices**: 9 preset voices with emotion/style control
+- **Voice Design**: Create new voices from natural language descriptions
+- **Streaming Playback**: Real-time audio generation with instant playback
+- **Batch Generation**: Process multiple texts in sequence
+
+### Speech-to-Text
+- **Transcription**: Accurate speech recognition with Faster-Whisper
+- **Noise Reduction**: Optional audio denoising before transcription
+- **Language Detection**: Auto-detect or specify source language
+
+### Voice Profiles
+- **Save & Load**: Persist voice samples for reuse
+- **Export/Import**: Share profiles as ZIP files
+- **Audio Trimming**: Trim reference samples to optimal length
+
+### Interface
+- **Waveform Visualization**: Visual audio display with wavesurfer.js
+- **Generation History**: Replay recent generations
+- **GPU Monitoring**: Real-time GPU utilization display
+- **HTTPS Support**: Self-signed certificates for secure LAN access
 
 ## Hardware Requirements
 
@@ -50,6 +66,16 @@ cd pyvs
 uv sync
 ```
 
+### Expected Warnings
+
+On startup you may see:
+
+```
+Warning: flash-attn is not installed. Will only run the manual PyTorch version.
+```
+
+This is expected. Flash-attn requires compilation against the exact PyTorch ABI and the pre-built wheels don't match PyTorch from the cu124 index. The application works correctly without it—Qwen-TTS falls back to a manual attention implementation.
+
 ## Usage
 
 ```bash
@@ -81,17 +107,44 @@ uv run python run.py --no-ssl
 ```
 pyvs/
 ├── app/
-│   ├── __init__.py      # Flask app factory
-│   ├── routes/          # API endpoints
-│   ├── services/        # TTS and STT services
-│   ├── static/          # Static assets (CSS, JS)
-│   └── templates/       # HTML templates
-├── certs/               # Auto-generated SSL certificates
-├── profiles/            # Saved voice profiles
-├── uploads/             # Temporary audio uploads
-├── run.py               # Application entry point
-└── pyproject.toml       # Project dependencies
+│   ├── __init__.py          # Flask app factory
+│   ├── routes/
+│   │   ├── tts.py           # TTS endpoints (clone, custom, design)
+│   │   ├── stt.py           # Speech-to-text endpoint
+│   │   ├── audio.py         # Audio upload, trim, stream
+│   │   ├── profiles.py      # Voice profile CRUD, export/import
+│   │   ├── history.py       # Generation history
+│   │   └── system.py        # GPU status
+│   ├── services/
+│   │   ├── tts_service.py   # Qwen3-TTS model wrapper
+│   │   ├── stt_service.py   # Faster-Whisper wrapper
+│   │   └── gpu_service.py   # GPU monitoring
+│   └── static/
+│       ├── index.html       # Single-page application
+│       ├── css/style.css    # Dark theme styles
+│       └── js/app.js        # Frontend logic
+├── certs/                   # Auto-generated SSL certificates
+├── profiles/                # Saved voice profiles
+├── uploads/                 # Temporary audio uploads
+├── run.py                   # Application entry point
+└── pyproject.toml           # Project dependencies
 ```
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/tts/clone/stream` | POST | Voice cloning with streaming |
+| `/api/tts/custom/stream` | POST | Custom voice with streaming |
+| `/api/tts/design/stream` | POST | Voice design with streaming |
+| `/api/stt` | POST | Speech-to-text transcription |
+| `/api/audio/upload` | POST | Upload reference audio |
+| `/api/audio/trim/<id>` | POST | Trim audio sample |
+| `/api/profiles` | GET/POST | List/create voice profiles |
+| `/api/profiles/<id>/export` | GET | Export profile as ZIP |
+| `/api/profiles/import` | POST | Import profile from ZIP |
+| `/api/history` | GET/POST | Generation history |
+| `/api/system/gpu` | GET | GPU status |
 
 ## License
 

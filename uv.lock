@@ -358,16 +358,6 @@ wheels = [
 ]
 
 [[package]]
-name = "flash-attn"
-version = "2.8.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "einops" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3b/b2/8d76c41ad7974ee264754709c22963447f7f8134613fd9ce80984ed0dab7/flash_attn-2.8.3.tar.gz", hash = "sha256:1e71dd64a9e0280e0447b8a0c2541bad4bf6ac65bdeaa2f90e51a9e57de0370d", size = 8447812, upload-time = "2025-08-15T08:28:12.911Z" }
-
-[[package]]
 name = "flask"
 version = "3.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1182,18 +1172,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pynvml"
-version = "13.0.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "nvidia-ml-py" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/57/da7dc63a79f59e082e26a66ac02d87d69ea316b35b35b7a00d82f3ce3d2f/pynvml-13.0.1.tar.gz", hash = "sha256:1245991d9db786b4d2f277ce66869bd58f38ac654e38c9397d18f243c8f6e48f", size = 35226, upload-time = "2025-09-05T20:33:25.377Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/4a/cac76c174bb439a0c46c9a4413fcbea5c6cabfb01879f7bbdb9fdfaed76c/pynvml-13.0.1-py3-none-any.whl", hash = "sha256:e2b20e0a501eeec951e2455b7ab444759cf048e0e13a57b08049fa2775266aa8", size = 28810, upload-time = "2025-09-05T20:33:24.13Z" },
-]
-
-[[package]]
 name = "pyparsing"
 version = "3.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1242,6 +1220,39 @@ wheels = [
 ]
 
 [[package]]
+name = "pyvs"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "cryptography" },
+    { name = "faster-whisper" },
+    { name = "flask" },
+    { name = "flask-cors" },
+    { name = "noisereduce" },
+    { name = "numba" },
+    { name = "numpy" },
+    { name = "nvidia-ml-py" },
+    { name = "qwen-tts" },
+    { name = "soundfile" },
+    { name = "torch" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=44.0.0" },
+    { name = "faster-whisper", specifier = ">=1.2.1" },
+    { name = "flask", specifier = ">=3.1.2" },
+    { name = "flask-cors", specifier = ">=6.0.2" },
+    { name = "noisereduce", specifier = ">=3.0.0" },
+    { name = "numba", specifier = ">=0.60.0" },
+    { name = "numpy" },
+    { name = "nvidia-ml-py", specifier = ">=13.0.0" },
+    { name = "qwen-tts", specifier = ">=0.0.5" },
+    { name = "soundfile", specifier = ">=0.13.1" },
+    { name = "torch", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu124" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1277,41 +1288,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/4a/89/a980e442819ca37b9caf5d8b9b5fc43ad63a33a7909a54218e732205d539/qwen_tts-0.0.5.tar.gz", hash = "sha256:7299bdc081dff8c7a5e5a1827a0225d960957e3349ac949d46018e6ca573db0d", size = 113866, upload-time = "2026-01-23T06:09:56.625Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/64/15/804f94d4cede62a9306de05d089a7ea9f8e4b7bb00fbad7d8d9937d788b6/qwen_tts-0.0.5-py3-none-any.whl", hash = "sha256:000db7a1ea9f582b5a2bc1af11358134bbf36876f3a270a905b7dbbb658731c8", size = 113320, upload-time = "2026-01-23T06:09:54.512Z" },
-]
-
-[[package]]
-name = "qwen-tts-web"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "cryptography" },
-    { name = "faster-whisper" },
-    { name = "flash-attn" },
-    { name = "flask" },
-    { name = "flask-cors" },
-    { name = "noisereduce" },
-    { name = "numba" },
-    { name = "numpy" },
-    { name = "pynvml" },
-    { name = "qwen-tts" },
-    { name = "soundfile" },
-    { name = "torch" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cryptography", specifier = ">=44.0.0" },
-    { name = "faster-whisper", specifier = ">=1.2.1" },
-    { name = "flash-attn", specifier = ">=2.8.3" },
-    { name = "flask", specifier = ">=3.1.2" },
-    { name = "flask-cors", specifier = ">=6.0.2" },
-    { name = "noisereduce", specifier = ">=3.0.0" },
-    { name = "numba", specifier = ">=0.60.0" },
-    { name = "numpy" },
-    { name = "pynvml", specifier = ">=13.0.1" },
-    { name = "qwen-tts", specifier = ">=0.0.5" },
-    { name = "soundfile", specifier = ">=0.13.1" },
-    { name = "torch", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu124" },
 ]
 
 [[package]]
