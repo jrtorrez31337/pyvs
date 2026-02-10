@@ -45,8 +45,13 @@ def upload_audio():
             data, sr = sf.read(wav_path)
 
             # Apply noise reduction if requested
+            denoised = False
             if denoise:
-                data = reduce_noise(data, sr)
+                try:
+                    data = reduce_noise(data, sr)
+                    denoised = True
+                except Exception as e:
+                    print(f"Noise reduction failed, using original: {e}")
 
             # Get duration
             duration = len(data) / sr
@@ -63,7 +68,7 @@ def upload_audio():
             'id': audio_id,
             'duration': round(duration, 2),
             'sample_rate': sr,
-            'denoised': denoise,
+            'denoised': denoised,
         })
 
     except Exception as e:
