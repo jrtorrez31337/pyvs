@@ -1,9 +1,39 @@
 """Shared audio processing utilities."""
 import os
+import subprocess
 import tempfile
 import numpy as np
 import soundfile as sf
 from app.services.clearvoice_service import clearvoice_service
+
+
+def convert_to_wav(input_path):
+    """Convert any audio format to WAV using ffmpeg.
+
+    Returns path to a temporary WAV file. Caller must delete it.
+    Returns the original path if already WAV/readable by soundfile.
+    """
+    # Try reading directly first
+    try:
+        sf.read(input_path, frames=1)
+        return input_path
+    except Exception:
+        pass
+
+    # Convert via ffmpeg
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp:
+        wav_path = tmp.name
+
+    try:
+        subprocess.run(
+            ['ffmpeg', '-i', input_path, '-ar', '24000', '-ac', '1', '-y', wav_path],
+            capture_output=True, check=True,
+        )
+        return wav_path
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        if os.path.exists(wav_path):
+            os.unlink(wav_path)
+        raise RuntimeError(f"Failed to convert audio to WAV: {e}") from e
 
 
 def reduce_noise(audio_data, sample_rate):
@@ -46,10 +76,16 @@ def reduce_noise_file(audio_path):
     """Apply speech enhancement to an audio file.
 
     Returns path to temporary file with enhanced audio.
+    Handles non-WAV formats (e.g. WebM) by converting first.
     """
-    data, sr = sf.read(audio_path)
-    reduced = reduce_noise(data, sr)
+    wav_path = convert_to_wav(audio_path)
+    try:
+        data, sr = sf.read(wav_path)
+        reduced = reduce_noise(data, sr)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp:
-        sf.write(tmp.name, reduced, sr)
-        return tmp.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp:
+            sf.write(tmp.name, reduced, sr)
+            return tmp.name
+    finally:
+        if wav_path != audio_path and os.path.exists(wav_path):
+            os.unlink(wav_path)

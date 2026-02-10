@@ -5,7 +5,7 @@ import numpy as np
 import soundfile as sf
 from flask import Blueprint, request, jsonify, current_app
 from app.config import is_valid_audio_id
-from app.services.audio_utils import reduce_noise
+from app.services.audio_utils import reduce_noise, convert_to_wav
 
 bp = Blueprint('audio', __name__, url_prefix='/api/audio')
 
@@ -36,9 +36,13 @@ def upload_audio():
             audio_file.save(tmp.name)
             tmp_path = tmp.name
 
+        wav_path = None
         try:
+            # Convert to WAV if needed (e.g. WebM from browser recording)
+            wav_path = convert_to_wav(tmp_path)
+
             # Read audio
-            data, sr = sf.read(tmp_path)
+            data, sr = sf.read(wav_path)
 
             # Apply noise reduction if requested
             if denoise:
@@ -52,6 +56,8 @@ def upload_audio():
 
         finally:
             os.unlink(tmp_path)
+            if wav_path and wav_path != tmp_path and os.path.exists(wav_path):
+                os.unlink(wav_path)
 
         return jsonify({
             'id': audio_id,
