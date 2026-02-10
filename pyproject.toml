@@ -12,11 +12,18 @@ dependencies = [
     "chatterbox-tts",
     "clearvoice",
     "numpy",
-    "soundfile>=0.13.1",
+    "soundfile",
     "torch>=2.6.0",
     "qwen-tts>=0.0.5",
     "numba>=0.60.0",
     "nvidia-ml-py>=13.0.0",
+]
+
+[tool.uv]
+override-dependencies = [
+    "librosa>=0.10.2",
+    "soundfile>=0.12.1",
+    "transformers>=4.46.3",
 ]
 
 [[tool.uv.index]]
