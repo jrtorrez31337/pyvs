@@ -3,29 +3,11 @@ import uuid
 import tempfile
 import numpy as np
 import soundfile as sf
-import noisereduce as nr
 from flask import Blueprint, request, jsonify, current_app
+from app.config import is_valid_audio_id
+from app.services.audio_utils import reduce_noise
 
 bp = Blueprint('audio', __name__, url_prefix='/api/audio')
-
-
-def apply_noise_reduction(audio_data, sample_rate):
-    """Apply noise reduction to audio data."""
-    # Ensure mono for processing
-    if len(audio_data.shape) > 1:
-        audio_mono = np.mean(audio_data, axis=1)
-    else:
-        audio_mono = audio_data
-
-    # Apply noise reduction - stationary noise (good for fans, HVAC, white noise)
-    reduced = nr.reduce_noise(
-        y=audio_mono,
-        sr=sample_rate,
-        stationary=True,
-        prop_decrease=0.75,  # Reduce noise by 75%
-    )
-
-    return reduced.astype(np.float32)
 
 
 @bp.route('/upload', methods=['POST'])
@@ -60,7 +42,7 @@ def upload_audio():
 
             # Apply noise reduction if requested
             if denoise:
-                data = apply_noise_reduction(data, sr)
+                data = reduce_noise(data, sr)
 
             # Get duration
             duration = len(data) / sr
@@ -85,6 +67,8 @@ def upload_audio():
 @bp.route('/delete/<audio_id>', methods=['DELETE'])
 def delete_audio(audio_id):
     """Delete uploaded audio file"""
+    if not is_valid_audio_id(audio_id):
+        return jsonify({'error': 'Invalid audio ID'}), 400
     file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{audio_id}.wav")
 
     if not os.path.exists(file_path):
@@ -100,6 +84,8 @@ def delete_audio(audio_id):
 @bp.route('/stream/<audio_id>', methods=['GET'])
 def stream_audio(audio_id):
     """Stream an uploaded audio file"""
+    if not is_valid_audio_id(audio_id):
+        return jsonify({'error': 'Invalid audio ID'}), 400
     from flask import send_file
     file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{audio_id}.wav")
 
@@ -112,6 +98,8 @@ def stream_audio(audio_id):
 @bp.route('/trim/<audio_id>', methods=['POST'])
 def trim_audio(audio_id):
     """Trim audio file to specified start/end times."""
+    if not is_valid_audio_id(audio_id):
+        return jsonify({'error': 'Invalid audio ID'}), 400
     data = request.get_json()
     start = data.get('start', 0)  # seconds
     end = data.get('end')  # seconds
@@ -145,6 +133,8 @@ def trim_audio(audio_id):
 @bp.route('/info/<audio_id>', methods=['GET'])
 def get_audio_info(audio_id):
     """Get audio file info (duration, sample rate)."""
+    if not is_valid_audio_id(audio_id):
+        return jsonify({'error': 'Invalid audio ID'}), 400
     file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{audio_id}.wav")
     if not os.path.exists(file_path):
         return jsonify({'error': 'Audio not found'}), 404

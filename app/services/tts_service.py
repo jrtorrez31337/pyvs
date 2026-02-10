@@ -1,8 +1,7 @@
 import torch
 import threading
 from qwen_tts import Qwen3TTSModel, Qwen3TTSTokenizer
-
-MODEL_BASE_PATH = "/data/models/Qwen"
+from app.config import TTS_MODEL_BASE_PATH as MODEL_BASE_PATH
 
 class TTSService:
     _instance = None

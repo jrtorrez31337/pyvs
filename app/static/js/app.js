@@ -1,3 +1,12 @@
+// Constants
+const DEFAULT_SAMPLE_RATE = 24000;
+const WAV_HEADER_SIZE = 44;
+const STREAMING_CHUNK_BYTES = 4800;  // ~100ms at 24kHz int16 mono
+const INT16_MAX = 32768;
+const MAX_TEXT_WARNING_LENGTH = 1000;
+const GPU_POLL_INTERVAL_MS = 5000;
+const HISTORY_DISPLAY_LIMIT = 10;
+
 // State
 let currentMode = 'stt';
 let mediaRecorder = null;
@@ -12,7 +21,7 @@ class StreamingAudioPlayer {
         this.sourceNodes = [];
         this.nextStartTime = 0;
         this.isPlaying = false;
-        this.sampleRate = 24000; // Will be updated from stream
+        this.sampleRate = DEFAULT_SAMPLE_RATE; // Will be updated from stream
     }
 
     async init() {
@@ -39,7 +48,7 @@ class StreamingAudioPlayer {
         // Convert Int16 to Float32
         const float32Data = new Float32Array(audioData.length);
         for (let i = 0; i < audioData.length; i++) {
-            float32Data[i] = audioData[i] / 32768;
+            float32Data[i] = audioData[i] / INT16_MAX;
         }
 
         const audioBuffer = this.audioContext.createBuffer(
@@ -96,16 +105,16 @@ async function generateWithStreaming(endpoint, body) {
             buffer = newBuffer;
 
             // Skip WAV header (44 bytes)
-            if (!headerParsed && buffer.length >= 44) {
+            if (!headerParsed && buffer.length >= WAV_HEADER_SIZE) {
                 // Parse sample rate from header (bytes 24-27)
                 const dataView = new DataView(buffer.buffer);
                 streamingPlayer.sampleRate = dataView.getUint32(24, true);
-                buffer = buffer.slice(44);
+                buffer = buffer.slice(WAV_HEADER_SIZE);
                 headerParsed = true;
             }
 
             // Process complete samples (2 bytes per sample for int16)
-            if (headerParsed && buffer.length >= 4800) { // ~100ms of audio at 24kHz
+            if (headerParsed && buffer.length >= STREAMING_CHUNK_BYTES) { // ~100ms of audio at 24kHz
                 const samplesToProcess = Math.floor(buffer.length / 2) * 2;
                 const audioData = new Int16Array(
                     buffer.slice(0, samplesToProcess).buffer
@@ -200,7 +209,7 @@ function initGPUStatus() {
 
     // Initial update and poll every 5 seconds
     updateGPUStatus();
-    setInterval(updateGPUStatus, 5000);
+    setInterval(updateGPUStatus, GPU_POLL_INTERVAL_MS);
 }
 
 // History
@@ -227,11 +236,11 @@ function initHistory() {
     }
 
     function renderHistory(history) {
-        historyList.innerHTML = history.slice(0, 10).map(item => `
-            <div class="history-item" data-id="${item.id}" data-audio-id="${item.audio_id}">
-                <div class="history-mode">${item.mode}</div>
-                <div class="history-text">${item.text.substring(0, 50)}${item.text.length > 50 ? '...' : ''}</div>
-                <button class="history-play" data-audio-id="${item.audio_id}">▶</button>
+        historyList.innerHTML = history.slice(0, HISTORY_DISPLAY_LIMIT).map(item => `
+            <div class="history-item" data-id="${escapeHtml(item.id)}" data-audio-id="${escapeHtml(item.audio_id)}">
+                <div class="history-mode">${escapeHtml(item.mode)}</div>
+                <div class="history-text">${escapeHtml(item.text.substring(0, 50))}${item.text.length > 50 ? '...' : ''}</div>
+                <button class="history-play" data-audio-id="${escapeHtml(item.audio_id)}">&#9654;</button>
             </div>
         `).join('') || '<p class="empty">No history yet</p>';
 
@@ -332,7 +341,7 @@ function initTextCounters() {
             wordCount.textContent = text.trim() ? text.trim().split(/\s+/).length : 0;
 
             // Warn if too long (adjust limit as needed)
-            if (text.length > 1000) {
+            if (text.length > MAX_TEXT_WARNING_LENGTH) {
                 counter.classList.add('warning');
             } else {
                 counter.classList.remove('warning');
@@ -823,11 +832,11 @@ function initVoiceClone() {
                     <div class="sample-audio">
                         <audio src="${sample.blobUrl}" controls></audio>
                     </div>
-                    <button class="sample-trim" data-index="${index}" data-id="${sample.id}">✂</button>
+                    <button class="sample-trim" data-index="${index}" data-id="${escapeHtml(sample.id)}">✂</button>
                     <button class="sample-remove" data-index="${index}">✕</button>
                 </div>
                 <input type="text" class="sample-transcript" placeholder="Transcript of this sample..."
-                       value="${sample.transcript}" data-index="${index}">
+                       value="${escapeHtml(sample.transcript)}" data-index="${index}">
             </div>
         `).join('');
 
@@ -1399,6 +1408,12 @@ async function loadSpeakers() {
 }
 
 // Utility
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 function showLoading() {
     loadingOverlay.classList.remove('hidden');
 }

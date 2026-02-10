@@ -1,35 +1,10 @@
 import os
 import tempfile
-import numpy as np
-import soundfile as sf
-import noisereduce as nr
 from flask import Blueprint, request, jsonify, current_app
 from app.services.stt_service import stt_service
+from app.services.audio_utils import reduce_noise_file
 
 bp = Blueprint('stt', __name__, url_prefix='/api/stt')
-
-
-def apply_noise_reduction(audio_path):
-    """Apply noise reduction and return path to cleaned audio."""
-    # Read audio
-    data, sr = sf.read(audio_path)
-
-    # Ensure mono
-    if len(data.shape) > 1:
-        data = np.mean(data, axis=1)
-
-    # Apply noise reduction
-    reduced = nr.reduce_noise(
-        y=data,
-        sr=sr,
-        stationary=True,
-        prop_decrease=0.75,
-    )
-
-    # Save to new temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp:
-        sf.write(tmp.name, reduced.astype(np.float32), sr)
-        return tmp.name
 
 
 @bp.route('', methods=['POST'])
@@ -60,18 +35,15 @@ def transcribe():
         transcribe_path = temp_path
         if denoise:
             try:
-                denoised_path = apply_noise_reduction(temp_path)
+                denoised_path = reduce_noise_file(temp_path)
                 transcribe_path = denoised_path
             except Exception as e:
                 print(f"Noise reduction failed, using original: {e}")
 
         # Transcribe
         auto_detect = request.form.get('auto_detect', 'false').lower() == 'true'
-
-        if auto_detect:
-            result = stt_service.transcribe_with_language_detect(transcribe_path)
-        else:
-            result = stt_service.transcribe(transcribe_path)
+        language = None if auto_detect else request.form.get('language', 'en')
+        result = stt_service.transcribe(transcribe_path, language=language)
 
         result['denoised'] = denoise and denoised_path is not None
         return jsonify(result)

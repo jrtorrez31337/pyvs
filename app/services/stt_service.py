@@ -1,7 +1,6 @@
 import threading
 from faster_whisper import WhisperModel
-
-MODEL_CACHE_PATH = "/data/models/whisper"
+from app.config import STT_MODEL_CACHE_PATH as MODEL_CACHE_PATH
 
 class STTService:
     _instance = None
@@ -45,16 +44,22 @@ class STTService:
             self._model_loaded = True
             print("Whisper model loaded successfully!")
 
-    def transcribe(self, audio_path: str) -> dict:
-        """Transcribe audio file to text"""
-        with self._model_lock:
-            segments, info = self.model.transcribe(
-                audio_path,
-                beam_size=5,
-                language="en",  # Primary use is English
-                vad_filter=True,
-            )
+    def transcribe(self, audio_path: str, language: str = None) -> dict:
+        """Transcribe audio file to text.
 
+        Args:
+            audio_path: path to audio file
+            language: language code (e.g., 'en'), or None for auto-detect
+        """
+        with self._model_lock:
+            kwargs = {
+                'beam_size': 5,
+                'vad_filter': True,
+            }
+            if language:
+                kwargs['language'] = language
+
+            segments, info = self.model.transcribe(audio_path, **kwargs)
             text = " ".join([segment.text.strip() for segment in segments])
 
             return {
@@ -65,22 +70,8 @@ class STTService:
             }
 
     def transcribe_with_language_detect(self, audio_path: str) -> dict:
-        """Transcribe audio with automatic language detection"""
-        with self._model_lock:
-            segments, info = self.model.transcribe(
-                audio_path,
-                beam_size=5,
-                vad_filter=True,
-            )
-
-            text = " ".join([segment.text.strip() for segment in segments])
-
-            return {
-                "text": text,
-                "language": info.language,
-                "language_probability": info.language_probability,
-                "duration": info.duration,
-            }
+        """Transcribe with auto language detection. Alias for transcribe(path, None)."""
+        return self.transcribe(audio_path, language=None)
 
 
 # Singleton instance

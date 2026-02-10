@@ -3,12 +3,12 @@ import uuid
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app, send_file
 import soundfile as sf
+from app.config import MAX_HISTORY_ITEMS as MAX_HISTORY, is_valid_audio_id
 
 bp = Blueprint('history', __name__, url_prefix='/api/history')
 
 # In-memory history (could be persisted to file/db)
 _history = []
-MAX_HISTORY = 50
 
 
 def get_history_dir():
@@ -72,14 +72,16 @@ def clear_history():
 @bp.route('/audio/<audio_id>', methods=['GET'])
 def get_history_audio(audio_id):
     """Get audio file from history."""
-    # Check generated audio cache first
-    from app.routes.tts import _generated_audio
-    if audio_id in _generated_audio:
+    if not is_valid_audio_id(audio_id):
+        return jsonify({'error': 'Invalid audio ID'}), 400
+    from app.routes.tts import get_cached_audio
+    entry = get_cached_audio(audio_id)
+    if entry:
         import io
-        wav, sr = _generated_audio[audio_id]
+        wav, sr = entry
         buffer = io.BytesIO()
         sf.write(buffer, wav, sr, format='WAV')
         buffer.seek(0)
         return send_file(buffer, mimetype='audio/wav')
 
-    return jsonify({'error': 'Audio not found'}), 404
+    return jsonify({'error': 'Audio not found or expired'}), 404

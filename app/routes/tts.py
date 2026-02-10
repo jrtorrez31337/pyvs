@@ -1,11 +1,15 @@
 import io
 import os
+import time
 import uuid
 import struct
+import threading
+from collections import OrderedDict
 import numpy as np
 import soundfile as sf
 from flask import Blueprint, request, jsonify, Response, current_app
 from app.services.tts_service import tts_service
+from app.config import MAX_CACHED_AUDIO, AUDIO_CACHE_TTL_SECONDS, MAX_TEXT_LENGTH, MAX_INSTRUCT_LENGTH, is_valid_audio_id
 
 
 def create_wav_header(sample_rate: int, num_channels: int = 1, bits_per_sample: int = 16):
@@ -35,8 +39,51 @@ def create_wav_header(sample_rate: int, num_channels: int = 1, bits_per_sample: 
 
 bp = Blueprint('tts', __name__, url_prefix='/api/tts')
 
-# Store generated audio for download
-_generated_audio = {}
+# Store generated audio for download (TTL-evicting cache)
+_generated_audio = OrderedDict()  # job_id -> (wav, sr, timestamp)
+_audio_cache_lock = threading.Lock()
+
+
+def _cache_audio(job_id, wav, sr):
+    """Store audio with TTL eviction."""
+    now = time.time()
+    with _audio_cache_lock:
+        _generated_audio[job_id] = (wav, sr, now)
+        expired = [
+            k for k, (_, _, ts) in _generated_audio.items()
+            if now - ts > AUDIO_CACHE_TTL_SECONDS
+        ]
+        for k in expired:
+            del _generated_audio[k]
+        while len(_generated_audio) > MAX_CACHED_AUDIO:
+            _generated_audio.popitem(last=False)
+
+
+def get_cached_audio(job_id):
+    """Retrieve cached audio, or None if expired/missing."""
+    with _audio_cache_lock:
+        entry = _generated_audio.get(job_id)
+        if entry is None:
+            return None
+        wav, sr, ts = entry
+        if time.time() - ts > AUDIO_CACHE_TTL_SECONDS:
+            del _generated_audio[job_id]
+            return None
+        return wav, sr
+
+
+def _validate_text(text, field_name="text"):
+    if not text:
+        return f"{field_name} is required"
+    if len(text) > MAX_TEXT_LENGTH:
+        return f"{field_name} exceeds maximum length of {MAX_TEXT_LENGTH} characters"
+    return None
+
+
+def _validate_instruct(instruct):
+    if instruct and len(instruct) > MAX_INSTRUCT_LENGTH:
+        return f"Instruction exceeds maximum length of {MAX_INSTRUCT_LENGTH} characters"
+    return None
 
 
 @bp.route('/clone', methods=['POST'])
@@ -56,10 +103,15 @@ def tts_clone():
         ref_audio_ids = [data.get('ref_audio_id')]
         ref_texts = [data.get('ref_text')]
 
-    if not text:
-        return jsonify({'error': 'Text is required'}), 400
+    err = _validate_text(text)
+    if err:
+        return jsonify({'error': err}), 400
     if not ref_audio_ids:
         return jsonify({'error': 'At least one reference audio is required'}), 400
+
+    for audio_id in ref_audio_ids:
+        if not is_valid_audio_id(audio_id):
+            return jsonify({'error': f'Invalid audio ID: {audio_id}'}), 400
 
     # Get reference audio paths
     ref_audio_paths = []
@@ -78,7 +130,7 @@ def tts_clone():
 
         # Store for download
         job_id = str(uuid.uuid4())
-        _generated_audio[job_id] = (wav, sr)
+        _cache_audio(job_id, wav, sr)
 
         # Return as streaming audio
         buffer = io.BytesIO()
@@ -107,10 +159,15 @@ def tts_clone_stream():
     ref_audio_ids = data.get('ref_audio_ids') or []
     ref_texts = data.get('ref_texts') or []
 
-    if not text:
-        return jsonify({'error': 'Text is required'}), 400
+    err = _validate_text(text)
+    if err:
+        return jsonify({'error': err}), 400
     if not ref_audio_ids:
         return jsonify({'error': 'At least one reference audio is required'}), 400
+
+    for audio_id in ref_audio_ids:
+        if not is_valid_audio_id(audio_id):
+            return jsonify({'error': f'Invalid audio ID: {audio_id}'}), 400
 
     ref_audio_paths = []
     for audio_id in ref_audio_ids:
@@ -145,7 +202,7 @@ def tts_clone_stream():
             if all_chunks:
                 full_audio = np.concatenate(all_chunks)
                 job_id = str(uuid.uuid4())
-                _generated_audio[job_id] = (full_audio, sample_rate)
+                _cache_audio(job_id, full_audio, sample_rate)
                 # Send job ID as final chunk marker (won't be played as audio)
                 yield f"<!--JOB_ID:{job_id}-->".encode()
 
@@ -172,8 +229,12 @@ def tts_custom():
     speaker = data.get('speaker')
     instruct = data.get('instruct')
 
-    if not text:
-        return jsonify({'error': 'Text is required'}), 400
+    err = _validate_text(text)
+    if err:
+        return jsonify({'error': err}), 400
+    err = _validate_instruct(instruct)
+    if err:
+        return jsonify({'error': err}), 400
     if not speaker:
         return jsonify({'error': 'Speaker is required'}), 400
 
@@ -182,7 +243,7 @@ def tts_custom():
 
         # Store for download
         job_id = str(uuid.uuid4())
-        _generated_audio[job_id] = (wav, sr)
+        _cache_audio(job_id, wav, sr)
 
         # Return as audio
         buffer = io.BytesIO()
@@ -211,8 +272,12 @@ def tts_custom_stream():
     speaker = data.get('speaker')
     instruct = data.get('instruct')
 
-    if not text:
-        return jsonify({'error': 'Text is required'}), 400
+    err = _validate_text(text)
+    if err:
+        return jsonify({'error': err}), 400
+    err = _validate_instruct(instruct)
+    if err:
+        return jsonify({'error': err}), 400
     if not speaker:
         return jsonify({'error': 'Speaker is required'}), 400
 
@@ -237,7 +302,7 @@ def tts_custom_stream():
             if all_chunks:
                 full_audio = np.concatenate(all_chunks)
                 job_id = str(uuid.uuid4())
-                _generated_audio[job_id] = (full_audio, sample_rate)
+                _cache_audio(job_id, full_audio, sample_rate)
                 yield f"<!--JOB_ID:{job_id}-->".encode()
 
         except Exception as e:
@@ -262,8 +327,12 @@ def tts_design():
     language = data.get('language', 'English')
     instruct = data.get('instruct')
 
-    if not text:
-        return jsonify({'error': 'Text is required'}), 400
+    err = _validate_text(text)
+    if err:
+        return jsonify({'error': err}), 400
+    err = _validate_instruct(instruct)
+    if err:
+        return jsonify({'error': err}), 400
     if not instruct:
         return jsonify({'error': 'Voice design instruction is required'}), 400
 
@@ -272,7 +341,7 @@ def tts_design():
 
         # Store for download
         job_id = str(uuid.uuid4())
-        _generated_audio[job_id] = (wav, sr)
+        _cache_audio(job_id, wav, sr)
 
         # Return as audio
         buffer = io.BytesIO()
@@ -300,8 +369,12 @@ def tts_design_stream():
     language = data.get('language', 'English')
     instruct = data.get('instruct')
 
-    if not text:
-        return jsonify({'error': 'Text is required'}), 400
+    err = _validate_text(text)
+    if err:
+        return jsonify({'error': err}), 400
+    err = _validate_instruct(instruct)
+    if err:
+        return jsonify({'error': err}), 400
     if not instruct:
         return jsonify({'error': 'Voice design instruction is required'}), 400
 
@@ -326,7 +399,7 @@ def tts_design_stream():
             if all_chunks:
                 full_audio = np.concatenate(all_chunks)
                 job_id = str(uuid.uuid4())
-                _generated_audio[job_id] = (full_audio, sample_rate)
+                _cache_audio(job_id, full_audio, sample_rate)
                 yield f"<!--JOB_ID:{job_id}-->".encode()
 
         except Exception as e:
@@ -369,10 +442,14 @@ def get_languages():
 @bp.route('/download/<job_id>', methods=['GET'])
 def download_audio(job_id):
     """Download generated audio by job ID"""
-    if job_id not in _generated_audio:
+    if not is_valid_audio_id(job_id):
+        return jsonify({'error': 'Invalid job ID'}), 400
+
+    entry = get_cached_audio(job_id)
+    if entry is None:
         return jsonify({'error': 'Audio not found or expired'}), 404
 
-    wav, sr = _generated_audio[job_id]
+    wav, sr = entry
 
     buffer = io.BytesIO()
     sf.write(buffer, wav, sr, format='WAV')
