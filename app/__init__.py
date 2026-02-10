@@ -31,13 +31,14 @@ def create_app():
     # Clean up stale uploads older than 24 hours
     _cleanup_stale_uploads(app.config['UPLOAD_FOLDER'])
 
-    from app.routes import tts, stt, audio, profiles, system, history
+    from app.routes import tts, stt, audio, profiles, system, history, chatterbox
     app.register_blueprint(tts.bp)
     app.register_blueprint(stt.bp)
     app.register_blueprint(audio.bp)
     app.register_blueprint(profiles.bp)
     app.register_blueprint(system.bp)
     app.register_blueprint(history.bp)
+    app.register_blueprint(chatterbox.bp)
 
     @app.route('/')
     def index():

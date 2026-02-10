@@ -174,6 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initVoiceClone();
     initCustomVoice();
     initVoiceDesign();
+    initChatterbox();
     initAudioPlayer();
     initGPUStatus();
     initHistory();
@@ -326,7 +327,7 @@ function getTextsForMode(mode) {
 
 // Text Counters
 function initTextCounters() {
-    const textareas = document.querySelectorAll('#clone-text, #custom-text, #design-text');
+    const textareas = document.querySelectorAll('#clone-text, #custom-text, #design-text, #chatterbox-text');
 
     textareas.forEach(textarea => {
         const counter = textarea.parentElement.querySelector('.text-counter');
@@ -526,6 +527,7 @@ function initSTT() {
             document.getElementById('clone-text').value = text;
             document.getElementById('custom-text').value = text;
             document.getElementById('design-text').value = text;
+            document.getElementById('chatterbox-text').value = text;
         }
     });
 
@@ -932,7 +934,8 @@ function initVoiceClone() {
                     text,
                     language,
                     ref_audio_ids: refAudioIds,
-                    ref_texts: refTexts
+                    ref_texts: refTexts,
+                    fast: document.getElementById('clone-fast-mode').checked
                 })
             });
 
@@ -1207,7 +1210,8 @@ function initCustomVoice() {
                     text,
                     language,
                     speaker,
-                    instruct: instruct || null
+                    instruct: instruct || null,
+                    fast: document.getElementById('custom-fast-mode').checked
                 })
             });
 
@@ -1286,6 +1290,133 @@ function initVoiceDesign() {
         } finally {
             hideLoading();
         }
+    }
+}
+
+// Chatterbox Mode
+function initChatterbox() {
+    const generateBtn = document.getElementById('chatterbox-generate-btn');
+    const textInput = document.getElementById('chatterbox-text');
+    const exaggerationSlider = document.getElementById('chatterbox-exaggeration');
+    const exaggerationValue = document.getElementById('exaggeration-value');
+    const cfgSlider = document.getElementById('chatterbox-cfg');
+    const cfgValue = document.getElementById('cfg-value');
+    const uploadZone = document.getElementById('chatterbox-upload-zone');
+    const audioInput = document.getElementById('chatterbox-audio-input');
+    const refPreview = document.getElementById('chatterbox-ref-preview');
+    const refAudio = document.getElementById('chatterbox-ref-audio');
+    const refRemove = document.getElementById('chatterbox-ref-remove');
+
+    let refAudioId = null;
+
+    // Load Chatterbox languages
+    loadChatterboxLanguages();
+
+    // Slider value display
+    exaggerationSlider.addEventListener('input', () => {
+        exaggerationValue.textContent = exaggerationSlider.value;
+    });
+    cfgSlider.addEventListener('input', () => {
+        cfgValue.textContent = cfgSlider.value;
+    });
+
+    // Reference audio upload
+    uploadZone.addEventListener('click', () => audioInput.click());
+    uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+    uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+    uploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadZone.classList.remove('dragover');
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('audio/')) uploadRefAudio(file);
+    });
+    audioInput.addEventListener('change', (e) => {
+        if (e.target.files[0]) { uploadRefAudio(e.target.files[0]); audioInput.value = ''; }
+    });
+    refRemove.addEventListener('click', () => {
+        refAudioId = null;
+        refPreview.classList.add('hidden');
+        uploadZone.classList.remove('hidden');
+    });
+
+    async function uploadRefAudio(file) {
+        const formData = new FormData();
+        formData.append('audio', file, file.name);
+        formData.append('denoise', 'true');
+        try {
+            showLoading();
+            const response = await fetch('/api/audio/upload', { method: 'POST', body: formData });
+            const data = await response.json();
+            if (data.error) throw new Error(data.error);
+            refAudioId = data.id;
+            refAudio.src = URL.createObjectURL(file);
+            refPreview.classList.remove('hidden');
+            uploadZone.classList.add('hidden');
+        } catch (err) {
+            alert('Upload failed: ' + err.message);
+        } finally {
+            hideLoading();
+        }
+    }
+
+    // Generate
+    textInput.addEventListener('input', () => { generateBtn.disabled = !textInput.value.trim(); });
+    generateBtn.addEventListener('click', generateChatterbox);
+
+    async function generateChatterbox() {
+        const text = textInput.value.trim();
+        if (!text) return;
+
+        const languageId = document.getElementById('chatterbox-language').value;
+        const exaggeration = parseFloat(exaggerationSlider.value);
+        const cfgWeight = parseFloat(cfgSlider.value);
+
+        try {
+            showLoading();
+            const response = await fetch('/api/tts/chatterbox/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text, language_id: languageId, exaggeration,
+                    cfg_weight: cfgWeight, ref_audio_id: refAudioId,
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Generation failed');
+            }
+
+            currentJobId = response.headers.get('X-Job-Id');
+            const audioBlob = await response.blob();
+            playGeneratedAudio(audioBlob);
+
+            if (currentJobId) {
+                window.addToHistory('chatterbox', text, languageId,
+                    { exaggeration, cfg_weight: cfgWeight }, currentJobId);
+            }
+        } catch (err) {
+            alert('Generation failed: ' + err.message);
+        } finally {
+            hideLoading();
+        }
+    }
+}
+
+async function loadChatterboxLanguages() {
+    try {
+        const response = await fetch('/api/tts/chatterbox/languages');
+        const languages = await response.json();
+        const select = document.getElementById('chatterbox-language');
+        languages.forEach(lang => {
+            const option = document.createElement('option');
+            option.value = lang.id;
+            option.textContent = lang.name;
+            if (lang.id === 'en') option.selected = true;
+            select.appendChild(option);
+        });
+    } catch (err) {
+        console.error('Error loading Chatterbox languages:', err);
     }
 }
 

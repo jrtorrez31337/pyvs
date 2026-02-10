@@ -125,8 +125,10 @@ def tts_clone():
     while len(ref_texts) < len(ref_audio_paths):
         ref_texts.append(None)
 
+    fast = data.get('fast', False)
+
     try:
-        wav, sr = tts_service.generate_clone(text, language, ref_audio_paths, ref_texts)
+        wav, sr = tts_service.generate_clone(text, language, ref_audio_paths, ref_texts, fast=fast)
 
         # Store for download
         job_id = str(uuid.uuid4())
@@ -179,6 +181,8 @@ def tts_clone_stream():
     while len(ref_texts) < len(ref_audio_paths):
         ref_texts.append(None)
 
+    fast = data.get('fast', False)
+
     def generate():
         header_sent = False
         all_chunks = []
@@ -186,7 +190,7 @@ def tts_clone_stream():
 
         try:
             for chunk, sr in tts_service.generate_clone_streaming(
-                text, language, ref_audio_paths, ref_texts
+                text, language, ref_audio_paths, ref_texts, fast=fast
             ):
                 if not header_sent:
                     sample_rate = sr
@@ -228,6 +232,7 @@ def tts_custom():
     language = data.get('language', 'English')
     speaker = data.get('speaker')
     instruct = data.get('instruct')
+    fast = data.get('fast', False)
 
     err = _validate_text(text)
     if err:
@@ -239,7 +244,7 @@ def tts_custom():
         return jsonify({'error': 'Speaker is required'}), 400
 
     try:
-        wav, sr = tts_service.generate_custom(text, language, speaker, instruct)
+        wav, sr = tts_service.generate_custom(text, language, speaker, instruct, fast=fast)
 
         # Store for download
         job_id = str(uuid.uuid4())
@@ -271,6 +276,7 @@ def tts_custom_stream():
     language = data.get('language', 'English')
     speaker = data.get('speaker')
     instruct = data.get('instruct')
+    fast = data.get('fast', False)
 
     err = _validate_text(text)
     if err:
@@ -288,7 +294,7 @@ def tts_custom_stream():
 
         try:
             for chunk, sr in tts_service.generate_custom_streaming(
-                text, language, speaker, instruct
+                text, language, speaker, instruct, fast=fast
             ):
                 if not header_sent:
                     sample_rate = sr

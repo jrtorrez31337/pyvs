@@ -16,13 +16,26 @@ MAX_CACHED_AUDIO = 100
 AUDIO_CACHE_TTL_SECONDS = 3600  # 1 hour
 UPLOAD_MAX_AGE_SECONDS = 86400  # 24 hours
 
-# Noise reduction
-NOISE_REDUCE_STATIONARY = True
-NOISE_REDUCE_PROP_DECREASE = 0.75
+# Speech enhancement (ClearerVoice)
+CLEARVOICE_MODEL = "MossFormer2_SE_48K"
 
 # Model paths
 TTS_MODEL_BASE_PATH = "/data/models/Qwen"
+TTS_FAST_MODEL_ENABLED = True  # Load 0.6B models for fast mode
 STT_MODEL_CACHE_PATH = "/data/models/whisper"
+STT_MODEL_NAME = "large-v3-turbo"
+
+# Chatterbox TTS
+CHATTERBOX_DEVICE = "cuda:0"
+CHATTERBOX_LANGUAGES = [
+    ("ar", "Arabic"), ("da", "Danish"), ("de", "German"), ("el", "Greek"),
+    ("en", "English"), ("es", "Spanish"), ("fi", "Finnish"), ("fr", "French"),
+    ("he", "Hebrew"), ("hi", "Hindi"), ("it", "Italian"), ("ja", "Japanese"),
+    ("ko", "Korean"), ("ms", "Malay"), ("nl", "Dutch"), ("no", "Norwegian"),
+    ("pl", "Polish"), ("pt", "Portuguese"), ("ru", "Russian"), ("sv", "Swedish"),
+    ("sw", "Swahili"), ("tr", "Turkish"), ("zh", "Chinese"),
+]
+MAX_EXAGGERATION = 2.0
 
 # Audio ID validation (must be UUID format)
 AUDIO_ID_PATTERN = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')

@@ -109,11 +109,14 @@ def main():
 
     # Set environment variables for CUDA
     os.environ.setdefault('CUDA_VISIBLE_DEVICES', '0,1')
+    os.environ.setdefault('HF_HOME', '/data/models/huggingface')
 
     # Import app after setting environment
     from app import create_app
     from app.services.tts_service import tts_service
     from app.services.stt_service import stt_service
+    from app.services.clearvoice_service import clearvoice_service
+    from app.services.chatterbox_service import chatterbox_service
 
     app = create_app()
 
@@ -128,6 +131,12 @@ def main():
 
         print("\nLoading STT model on GPU 1...")
         stt_service.load_model()
+
+        print("\nLoading ClearVoice speech enhancement model...")
+        clearvoice_service.load_model()
+
+        print("\nLoading Chatterbox multilingual TTS...")
+        chatterbox_service.load_model()
 
         print("\n" + "="*60)
         print("All models loaded! Starting server...")

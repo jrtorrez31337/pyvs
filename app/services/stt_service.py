@@ -1,6 +1,6 @@
 import threading
 from faster_whisper import WhisperModel
-from app.config import STT_MODEL_CACHE_PATH as MODEL_CACHE_PATH
+from app.config import STT_MODEL_CACHE_PATH as MODEL_CACHE_PATH, STT_MODEL_NAME
 
 class STTService:
     _instance = None
@@ -33,9 +33,9 @@ class STTService:
             if self._model_loaded:
                 return
 
-            print("Loading Whisper medium model...")
+            print(f"Loading Whisper {STT_MODEL_NAME} model...")
             self.model = WhisperModel(
-                "medium",
+                STT_MODEL_NAME,
                 device="cuda",
                 device_index=1,
                 compute_type="float16",

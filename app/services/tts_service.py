@@ -25,6 +25,8 @@ class TTSService:
         self.clone_model = None
         self.custom_model = None
         self.design_model = None
+        self.clone_model_fast = None
+        self.custom_model_fast = None
 
         self._initialized = True
 
@@ -64,10 +66,26 @@ class TTSService:
                 dtype=torch.bfloat16,
             )
 
+            from app.config import TTS_FAST_MODEL_ENABLED
+            if TTS_FAST_MODEL_ENABLED:
+                print("Loading Qwen3-TTS-12Hz-0.6B-Base (fast clone)...")
+                self.clone_model_fast = Qwen3TTSModel.from_pretrained(
+                    f"{MODEL_BASE_PATH}/Qwen3-TTS-12Hz-0.6B-Base",
+                    device_map="cuda:0",
+                    dtype=torch.bfloat16,
+                )
+
+                print("Loading Qwen3-TTS-12Hz-0.6B-CustomVoice (fast custom)...")
+                self.custom_model_fast = Qwen3TTSModel.from_pretrained(
+                    f"{MODEL_BASE_PATH}/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+                    device_map="cuda:0",
+                    dtype=torch.bfloat16,
+                )
+
             self._models_loaded = True
             print("All TTS models loaded successfully!")
 
-    def generate_clone(self, text: str, language: str, ref_audio_paths, ref_texts=None):
+    def generate_clone(self, text: str, language: str, ref_audio_paths, ref_texts=None, fast=False):
         """Generate speech using voice cloning with one or more reference samples.
 
         Args:
@@ -75,8 +93,10 @@ class TTSService:
             language: Language for synthesis
             ref_audio_paths: Single path or list of paths to reference audio files
             ref_texts: Single text or list of transcripts (optional, improves quality)
+            fast: Use 0.6B model for faster generation
         """
         with self._model_lock:
+            model = self.clone_model_fast if (fast and self.clone_model_fast) else self.clone_model
             # Normalize to lists if single values passed
             if isinstance(ref_audio_paths, str):
                 ref_audio_paths = [ref_audio_paths]
@@ -85,7 +105,7 @@ class TTSService:
             elif isinstance(ref_texts, str):
                 ref_texts = [ref_texts]
 
-            wavs, sr = self.clone_model.generate_voice_clone(
+            wavs, sr = model.generate_voice_clone(
                 text=text,
                 language=language,
                 ref_audio=ref_audio_paths,
@@ -93,9 +113,10 @@ class TTSService:
             )
             return wavs[0], sr
 
-    def generate_custom(self, text: str, language: str, speaker: str, instruct: str = None):
+    def generate_custom(self, text: str, language: str, speaker: str, instruct: str = None, fast=False):
         """Generate speech using custom voice preset"""
         with self._model_lock:
+            model = self.custom_model_fast if (fast and self.custom_model_fast) else self.custom_model
             kwargs = {
                 "text": text,
                 "language": language,
@@ -104,7 +125,7 @@ class TTSService:
             if instruct:
                 kwargs["instruct"] = instruct
 
-            wavs, sr = self.custom_model.generate_custom_voice(**kwargs)
+            wavs, sr = model.generate_custom_voice(**kwargs)
             return wavs[0], sr
 
     def generate_design(self, text: str, language: str, instruct: str):
@@ -117,12 +138,13 @@ class TTSService:
             )
             return wavs[0], sr
 
-    def generate_clone_streaming(self, text: str, language: str, ref_audio_paths, ref_texts=None):
+    def generate_clone_streaming(self, text: str, language: str, ref_audio_paths, ref_texts=None, fast=False):
         """Generate speech using voice cloning with streaming output.
 
         Yields audio chunks as they are generated.
         """
         with self._model_lock:
+            model = self.clone_model_fast if (fast and self.clone_model_fast) else self.clone_model
             if isinstance(ref_audio_paths, str):
                 ref_audio_paths = [ref_audio_paths]
             if ref_texts is None:
@@ -131,7 +153,7 @@ class TTSService:
                 ref_texts = [ref_texts]
 
             # Use streaming mode
-            for chunk, sr in self.clone_model.generate_voice_clone(
+            for chunk, sr in model.generate_voice_clone(
                 text=text,
                 language=language,
                 ref_audio=ref_audio_paths,
@@ -140,9 +162,10 @@ class TTSService:
             ):
                 yield chunk, sr
 
-    def generate_custom_streaming(self, text: str, language: str, speaker: str, instruct: str = None):
+    def generate_custom_streaming(self, text: str, language: str, speaker: str, instruct: str = None, fast=False):
         """Generate speech using custom voice with streaming output."""
         with self._model_lock:
+            model = self.custom_model_fast if (fast and self.custom_model_fast) else self.custom_model
             kwargs = {
                 "text": text,
                 "language": language,
@@ -152,7 +175,7 @@ class TTSService:
             if instruct:
                 kwargs["instruct"] = instruct
 
-            for chunk, sr in self.custom_model.generate_custom_voice(**kwargs):
+            for chunk, sr in model.generate_custom_voice(**kwargs):
                 yield chunk, sr
 
     def generate_design_streaming(self, text: str, language: str, instruct: str):
