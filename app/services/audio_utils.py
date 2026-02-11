@@ -55,19 +55,16 @@ def reduce_noise(audio_data, sample_rate):
     finally:
         os.unlink(tmp_path)
 
-    # ClearerVoice may output at different sample rate (48kHz for MossFormer2_SE_48K)
-    # Resample back to original if needed
+    # MossFormer2_SE_48K outputs at 48kHz regardless of input rate.
+    # Resample back to original sample rate if they differ.
+    CLEARVOICE_OUTPUT_SR = 48000
     if isinstance(enhanced, np.ndarray):
         if len(enhanced.shape) > 1:
             enhanced = enhanced[0]  # Take first channel/batch
-        # If length differs significantly, resample
-        expected_len = len(audio_data)
-        if abs(len(enhanced) - expected_len) > expected_len * 0.1:
-            enhanced = np.interp(
-                np.linspace(0, 1, expected_len),
-                np.linspace(0, 1, len(enhanced)),
-                enhanced,
-            )
+        if sample_rate != CLEARVOICE_OUTPUT_SR:
+            import scipy.signal
+            num_samples = round(len(enhanced) * sample_rate / CLEARVOICE_OUTPUT_SR)
+            enhanced = scipy.signal.resample(enhanced, num_samples)
 
     return enhanced.astype(np.float32)
 

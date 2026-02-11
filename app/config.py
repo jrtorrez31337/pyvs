@@ -24,6 +24,7 @@ TTS_MODEL_BASE_PATH = "/data/models/Qwen"
 TTS_FAST_MODEL_ENABLED = True  # Load 0.6B models for fast mode
 STT_MODEL_CACHE_PATH = "/data/models/whisper"
 STT_MODEL_NAME = "large-v3-turbo"
+STT_DEVICE_INDEX = 1  # GPU index for Whisper STT
 
 # Chatterbox TTS
 CHATTERBOX_DEVICE = "cuda:0"

@@ -1,6 +1,7 @@
 import threading
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 from app.config import CHATTERBOX_DEVICE
+from app.services.gpu_lock import gpu0_lock
 
 
 class ChatterboxService:
@@ -18,7 +19,6 @@ class ChatterboxService:
     def __init__(self):
         if self._initialized:
             return
-        self._model_lock = threading.Lock()
         self._model_loaded = False
         self.model = None
         self._initialized = True
@@ -26,7 +26,7 @@ class ChatterboxService:
     def load_model(self):
         if self._model_loaded:
             return
-        with self._model_lock:
+        with gpu0_lock:
             if self._model_loaded:
                 return
             print("Loading Chatterbox Multilingual TTS...")
@@ -46,7 +46,8 @@ class ChatterboxService:
 
         Returns: (numpy_array, sample_rate)
         """
-        with self._model_lock:
+        self.load_model()
+        with gpu0_lock:
             wav = self.model.generate(
                 text,
                 language_id=language_id,

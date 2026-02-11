@@ -2,6 +2,7 @@ import threading
 import torch
 from clearvoice import ClearVoice
 from app.config import CLEARVOICE_MODEL
+from app.services.gpu_lock import gpu0_lock
 
 
 class ClearVoiceService:
@@ -19,7 +20,6 @@ class ClearVoiceService:
     def __init__(self):
         if self._initialized:
             return
-        self._model_lock = threading.Lock()
         self._model_loaded = False
         self.model = None
         self._initialized = True
@@ -27,7 +27,7 @@ class ClearVoiceService:
     def load_model(self):
         if self._model_loaded:
             return
-        with self._model_lock:
+        with gpu0_lock:
             if self._model_loaded:
                 return
             print(f"Loading ClearVoice {CLEARVOICE_MODEL}...")
@@ -45,7 +45,8 @@ class ClearVoiceService:
 
     def enhance_file(self, audio_path):
         """Enhance audio file, return enhanced numpy array."""
-        with self._model_lock:
+        self.load_model()
+        with gpu0_lock:
             return self.model(input_path=audio_path, online_write=False)
 
 

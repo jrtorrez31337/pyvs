@@ -118,9 +118,12 @@ class StreamingAudioPlayer {
 
 const streamingPlayer = new StreamingAudioPlayer();
 
-async function generateWithStreaming(endpoint, body) {
+async function generateWithStreaming(endpoint, body, onComplete) {
     streamingPlayer.reset();
     showLoading();
+
+    const allPcmChunks = [];
+    let streamSampleRate = DEFAULT_SAMPLE_RATE;
 
     try {
         const response = await fetchWithTimeout(endpoint, {
@@ -150,63 +153,113 @@ async function generateWithStreaming(endpoint, body) {
 
             // Skip WAV header (44 bytes)
             if (!headerParsed && buffer.length >= WAV_HEADER_SIZE) {
-                // Parse sample rate from header (bytes 24-27)
-                const dataView = new DataView(buffer.buffer);
-                streamingPlayer.sampleRate = dataView.getUint32(24, true);
+                const dataView = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+                streamSampleRate = dataView.getUint32(24, true);
+                streamingPlayer.sampleRate = streamSampleRate;
                 buffer = buffer.slice(WAV_HEADER_SIZE);
                 headerParsed = true;
             }
 
             // Process complete samples (2 bytes per sample for int16)
-            if (headerParsed && buffer.length >= STREAMING_CHUNK_BYTES) { // ~100ms of audio at 24kHz
+            if (headerParsed && buffer.length >= STREAMING_CHUNK_BYTES) {
                 const samplesToProcess = Math.floor(buffer.length / 2) * 2;
-                const audioData = new Int16Array(
-                    buffer.slice(0, samplesToProcess).buffer
-                );
+                const pcmBytes = buffer.slice(0, samplesToProcess);
+                allPcmChunks.push(pcmBytes);
+                const audioData = new Int16Array(pcmBytes.buffer);
                 await streamingPlayer.playChunk(audioData);
                 buffer = buffer.slice(samplesToProcess);
             }
         }
 
-        // Process remaining buffer
+        // Process remaining buffer — check tail for backend markers
+        let jobId = null;
         if (headerParsed && buffer.length >= 2) {
-            // Check for error marker from backend
-            const text = new TextDecoder().decode(buffer);
-            const errorMatch = text.match(/<!--ERROR:(.+?)-->/);
-            if (errorMatch) {
-                throw new Error(errorMatch[1]);
+            const checkSize = Math.min(100, buffer.length);
+            const tailText = new TextDecoder().decode(buffer.slice(buffer.length - checkSize));
+
+            const errorMatch = tailText.match(/<!--ERROR:(.+?)-->/);
+            if (errorMatch) throw new Error(errorMatch[1]);
+
+            const jobMatch = tailText.match(/<!--JOB_ID:([^>]+)-->/);
+            let pcmEnd = buffer.length;
+            if (jobMatch) {
+                jobId = jobMatch[1];
+                const markerPos = tailText.indexOf('<!--JOB_ID:');
+                pcmEnd = buffer.length - checkSize + markerPos;
             }
 
-            // Check for job ID marker
-            const jobIdMatch = text.match(/<!--JOB_ID:([^>]+)-->/);
-            if (jobIdMatch) {
-                currentJobId = jobIdMatch[1];
-                downloadBtn.disabled = false;
-                buffer = buffer.slice(0, buffer.indexOf(60)); // Remove marker
-            }
-
-            if (buffer.length >= 2) {
-                const samplesToProcess = Math.floor(buffer.length / 2) * 2;
-                const audioData = new Int16Array(
-                    buffer.slice(0, samplesToProcess).buffer
-                );
+            const samplesToProcess = Math.floor(pcmEnd / 2) * 2;
+            if (samplesToProcess >= 2) {
+                const pcmBytes = buffer.slice(0, samplesToProcess);
+                allPcmChunks.push(pcmBytes);
+                const audioData = new Int16Array(pcmBytes.buffer);
                 await streamingPlayer.playChunk(audioData);
             }
         }
 
-        // Only enable if we didn't get audio via streaming player
         if (!headerParsed) {
             throw new Error('No audio data received from server');
         }
 
-        playBtn.disabled = false;
-        playBtn.textContent = '⏸';
+        // Build complete WAV blob for WaveSurfer waveform and download
+        currentJobId = jobId;
+        const wavBlob = buildWavBlob(allPcmChunks, streamSampleRate);
+        currentAudioBlob = wavBlob;
+
+        // Load into WaveSurfer for waveform display and replay (don't auto-play — user already heard it live)
+        const wavUrl = URL.createObjectURL(wavBlob);
+        playBtn.disabled = true;
+        downloadBtn.disabled = true;
+        wavesurfer.load(wavUrl);
+        wavesurfer.once('ready', () => {
+            playBtn.disabled = false;
+            downloadBtn.disabled = false;
+        });
+
+        if (onComplete) onComplete(jobId);
 
     } catch (err) {
         console.error('Streaming error:', err);
         showToast('Generation failed: ' + err.message);
     } finally {
         hideLoading();
+    }
+}
+
+function buildWavBlob(pcmChunks, sampleRate) {
+    let totalLength = 0;
+    for (const chunk of pcmChunks) totalLength += chunk.length;
+
+    const wavBuffer = new ArrayBuffer(44 + totalLength);
+    const view = new DataView(wavBuffer);
+    const bytes = new Uint8Array(wavBuffer);
+
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + totalLength, true);
+    writeString(view, 8, 'WAVE');
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);  // PCM
+    view.setUint16(22, 1, true);  // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);  // block align
+    view.setUint16(34, 16, true); // bits per sample
+    writeString(view, 36, 'data');
+    view.setUint32(40, totalLength, true);
+
+    let offset = 44;
+    for (const chunk of pcmChunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.length;
+    }
+
+    return new Blob([wavBuffer], { type: 'audio/wav' });
+}
+
+function writeString(view, offset, string) {
+    for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
     }
 }
 
@@ -1018,43 +1071,18 @@ function initVoiceClone() {
             return;
         }
 
-        // Collect all sample IDs and transcripts
         const refAudioIds = samples.map(s => s.id);
         const refTexts = samples.map(s => s.transcript || null);
 
-        try {
-            showLoading();
-            const response = await fetchWithTimeout('/api/tts/clone', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    text,
-                    language,
-                    ref_audio_ids: refAudioIds,
-                    ref_texts: refTexts,
-                    fast: document.getElementById('clone-fast-mode').checked
-                })
-            });
-
-            if (!response.ok) {
-                const msg = await getErrorMessage(response, 'Generation failed');
-                throw new Error(msg);
-            }
-
-            currentJobId = response.headers.get('X-Job-Id');
-            const audioBlob = await response.blob();
-            playGeneratedAudio(audioBlob);
-
-            // Add to history
-            if (currentJobId) {
-                window.addToHistory('clone', text, language, { samples: samples.length }, currentJobId);
-            }
-        } catch (err) {
-            console.error('Generation error:', err);
-            showToast('Generation failed: ' + err.message);
-        } finally {
-            hideLoading();
-        }
+        await generateWithStreaming('/api/tts/clone/stream', {
+            text,
+            language,
+            ref_audio_ids: refAudioIds,
+            ref_texts: refTexts,
+            fast: document.getElementById('clone-fast-mode').checked
+        }, (jobId) => {
+            if (jobId) window.addToHistory('clone', text, language, { samples: samples.length }, jobId);
+        });
     }
 
     // ===== Profile Management =====
@@ -1301,39 +1329,15 @@ function initCustomVoice() {
             return;
         }
 
-        try {
-            showLoading();
-            const response = await fetchWithTimeout('/api/tts/custom', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    text,
-                    language,
-                    speaker,
-                    instruct: instruct || null,
-                    fast: document.getElementById('custom-fast-mode').checked
-                })
-            });
-
-            if (!response.ok) {
-                const msg = await getErrorMessage(response, 'Generation failed');
-                throw new Error(msg);
-            }
-
-            currentJobId = response.headers.get('X-Job-Id');
-            const audioBlob = await response.blob();
-            playGeneratedAudio(audioBlob);
-
-            // Add to history
-            if (currentJobId) {
-                window.addToHistory('custom', text, language, { speaker }, currentJobId);
-            }
-        } catch (err) {
-            console.error('Generation error:', err);
-            showToast('Generation failed: ' + err.message);
-        } finally {
-            hideLoading();
-        }
+        await generateWithStreaming('/api/tts/custom/stream', {
+            text,
+            language,
+            speaker,
+            instruct: instruct || null,
+            fast: document.getElementById('custom-fast-mode').checked
+        }, (jobId) => {
+            if (jobId) window.addToHistory('custom', text, language, { speaker }, jobId);
+        });
     }
 }
 
@@ -1366,37 +1370,13 @@ function initVoiceDesign() {
             return;
         }
 
-        try {
-            showLoading();
-            const response = await fetchWithTimeout('/api/tts/design', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    text,
-                    language,
-                    instruct
-                })
-            });
-
-            if (!response.ok) {
-                const msg = await getErrorMessage(response, 'Generation failed');
-                throw new Error(msg);
-            }
-
-            currentJobId = response.headers.get('X-Job-Id');
-            const audioBlob = await response.blob();
-            playGeneratedAudio(audioBlob);
-
-            // Add to history
-            if (currentJobId) {
-                window.addToHistory('design', text, language, { instruct }, currentJobId);
-            }
-        } catch (err) {
-            console.error('Generation error:', err);
-            showToast('Generation failed: ' + err.message);
-        } finally {
-            hideLoading();
-        }
+        await generateWithStreaming('/api/tts/design/stream', {
+            text,
+            language,
+            instruct
+        }, (jobId) => {
+            if (jobId) window.addToHistory('design', text, language, { instruct }, jobId);
+        });
     }
 }
 

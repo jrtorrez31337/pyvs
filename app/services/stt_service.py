@@ -1,6 +1,6 @@
 import threading
 from faster_whisper import WhisperModel
-from app.config import STT_MODEL_CACHE_PATH as MODEL_CACHE_PATH, STT_MODEL_NAME
+from app.config import STT_MODEL_CACHE_PATH as MODEL_CACHE_PATH, STT_MODEL_NAME, STT_DEVICE_INDEX
 
 class STTService:
     _instance = None
@@ -37,7 +37,7 @@ class STTService:
             self.model = WhisperModel(
                 STT_MODEL_NAME,
                 device="cuda",
-                device_index=1,
+                device_index=STT_DEVICE_INDEX,
                 compute_type="float16",
                 download_root=MODEL_CACHE_PATH,
             )
@@ -51,6 +51,7 @@ class STTService:
             audio_path: path to audio file
             language: language code (e.g., 'en'), or None for auto-detect
         """
+        self.load_model()
         with self._model_lock:
             kwargs = {
                 'beam_size': 5,

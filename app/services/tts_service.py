@@ -2,6 +2,7 @@ import torch
 import threading
 from qwen_tts import Qwen3TTSModel, Qwen3TTSTokenizer
 from app.config import TTS_MODEL_BASE_PATH as MODEL_BASE_PATH
+from app.services.gpu_lock import gpu0_lock
 
 class TTSService:
     _instance = None
@@ -19,7 +20,6 @@ class TTSService:
         if self._initialized:
             return
 
-        self._model_lock = threading.Lock()
         self._models_loaded = False
         self.tokenizer = None
         self.clone_model = None
@@ -35,7 +35,7 @@ class TTSService:
         if self._models_loaded:
             return
 
-        with self._model_lock:
+        with gpu0_lock:
             if self._models_loaded:
                 return
 
@@ -95,7 +95,8 @@ class TTSService:
             ref_texts: Single text or list of transcripts (optional, improves quality)
             fast: Use 0.6B model for faster generation
         """
-        with self._model_lock:
+        self.load_models()
+        with gpu0_lock:
             model = self.clone_model_fast if (fast and self.clone_model_fast) else self.clone_model
             # Normalize to lists if single values passed
             if isinstance(ref_audio_paths, str):
@@ -115,7 +116,8 @@ class TTSService:
 
     def generate_custom(self, text: str, language: str, speaker: str, instruct: str = None, fast=False):
         """Generate speech using custom voice preset"""
-        with self._model_lock:
+        self.load_models()
+        with gpu0_lock:
             model = self.custom_model_fast if (fast and self.custom_model_fast) else self.custom_model
             kwargs = {
                 "text": text,
@@ -130,7 +132,8 @@ class TTSService:
 
     def generate_design(self, text: str, language: str, instruct: str):
         """Generate speech using voice design"""
-        with self._model_lock:
+        self.load_models()
+        with gpu0_lock:
             wavs, sr = self.design_model.generate_voice_design(
                 text=text,
                 language=language,
@@ -143,7 +146,8 @@ class TTSService:
 
         Yields audio chunks as they are generated.
         """
-        with self._model_lock:
+        self.load_models()
+        with gpu0_lock:
             model = self.clone_model_fast if (fast and self.clone_model_fast) else self.clone_model
             if isinstance(ref_audio_paths, str):
                 ref_audio_paths = [ref_audio_paths]
@@ -164,7 +168,8 @@ class TTSService:
 
     def generate_custom_streaming(self, text: str, language: str, speaker: str, instruct: str = None, fast=False):
         """Generate speech using custom voice with streaming output."""
-        with self._model_lock:
+        self.load_models()
+        with gpu0_lock:
             model = self.custom_model_fast if (fast and self.custom_model_fast) else self.custom_model
             kwargs = {
                 "text": text,
@@ -180,7 +185,8 @@ class TTSService:
 
     def generate_design_streaming(self, text: str, language: str, instruct: str):
         """Generate speech using voice design with streaming output."""
-        with self._model_lock:
+        self.load_models()
+        with gpu0_lock:
             for chunk, sr in self.design_model.generate_voice_design(
                 text=text,
                 language=language,
