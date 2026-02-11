@@ -5,7 +5,11 @@ const STREAMING_CHUNK_BYTES = 4800;  // ~100ms at 24kHz int16 mono
 const INT16_MAX = 32768;
 const MAX_TEXT_WARNING_LENGTH = 1000;
 const GPU_POLL_INTERVAL_MS = 5000;
+const GPU_MAX_POLL_INTERVAL_MS = 60000;
 const HISTORY_DISPLAY_LIMIT = 10;
+const MAX_UPLOAD_SIZE_MB = 50;
+const MAX_SAMPLES = 10;
+const FETCH_TIMEOUT_MS = 300000; // 5 minutes for TTS generation
 
 // State
 let currentMode = 'stt';
@@ -13,6 +17,46 @@ let mediaRecorder = null;
 let audioChunks = [];
 let isRecording = false;
 let currentJobId = null;
+let currentAudioBlob = null;
+
+// Toast notification system
+function showToast(message, type = 'error', duration = 5000) {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('show'));
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
+// Fetch with timeout wrapper
+async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return response;
+    } catch (err) {
+        clearTimeout(id);
+        if (err.name === 'AbortError') throw new Error('Request timed out');
+        throw err;
+    }
+}
+
+// Safe error extraction from response
+async function getErrorMessage(response, fallback = 'Request failed') {
+    try {
+        const data = await response.json();
+        return data.error || fallback;
+    } catch {
+        return fallback;
+    }
+}
 
 // Streaming audio player using Web Audio API
 class StreamingAudioPlayer {
@@ -79,15 +123,15 @@ async function generateWithStreaming(endpoint, body) {
     showLoading();
 
     try {
-        const response = await fetch(endpoint, {
+        const response = await fetchWithTimeout(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
 
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Generation failed');
+            const msg = await getErrorMessage(response, 'Generation failed');
+            throw new Error(msg);
         }
 
         const reader = response.body.getReader();
@@ -126,8 +170,14 @@ async function generateWithStreaming(endpoint, body) {
 
         // Process remaining buffer
         if (headerParsed && buffer.length >= 2) {
-            // Check for job ID marker
+            // Check for error marker from backend
             const text = new TextDecoder().decode(buffer);
+            const errorMatch = text.match(/<!--ERROR:(.+?)-->/);
+            if (errorMatch) {
+                throw new Error(errorMatch[1]);
+            }
+
+            // Check for job ID marker
             const jobIdMatch = text.match(/<!--JOB_ID:([^>]+)-->/);
             if (jobIdMatch) {
                 currentJobId = jobIdMatch[1];
@@ -144,12 +194,17 @@ async function generateWithStreaming(endpoint, body) {
             }
         }
 
+        // Only enable if we didn't get audio via streaming player
+        if (!headerParsed) {
+            throw new Error('No audio data received from server');
+        }
+
         playBtn.disabled = false;
         playBtn.textContent = '⏸';
 
     } catch (err) {
         console.error('Streaming error:', err);
-        alert('Generation failed: ' + err.message);
+        showToast('Generation failed: ' + err.message);
     } finally {
         hideLoading();
     }
@@ -188,10 +243,13 @@ document.addEventListener('DOMContentLoaded', () => {
 // GPU Status Polling
 function initGPUStatus() {
     const gpuStatus = document.getElementById('gpu-status');
+    let pollInterval = GPU_POLL_INTERVAL_MS;
+    let consecutiveErrors = 0;
+    let timerId = null;
 
     async function updateGPUStatus() {
         try {
-            const response = await fetch('/api/system/gpu');
+            const response = await fetchWithTimeout('/api/system/gpu', {}, 10000);
             const gpus = await response.json();
 
             if (gpus.length === 0) {
@@ -203,14 +261,17 @@ function initGPUStatus() {
                 `GPU${gpu.index}: ${gpu.utilization}% | ${gpu.memory_used}/${gpu.memory_total}MB | ${gpu.temperature}°C`
             );
             gpuStatus.textContent = statusParts.join(' | ');
+            consecutiveErrors = 0;
+            pollInterval = GPU_POLL_INTERVAL_MS;
         } catch (err) {
-            gpuStatus.textContent = 'GPU: Error';
+            consecutiveErrors++;
+            gpuStatus.textContent = 'GPU: Unavailable';
+            pollInterval = Math.min(pollInterval * 2, GPU_MAX_POLL_INTERVAL_MS);
         }
+        timerId = setTimeout(updateGPUStatus, pollInterval);
     }
 
-    // Initial update and poll every 5 seconds
     updateGPUStatus();
-    setInterval(updateGPUStatus, GPU_POLL_INTERVAL_MS);
 }
 
 // History
@@ -250,10 +311,16 @@ function initHistory() {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const audioId = e.target.dataset.audioId;
-                const response = await fetch(`/api/history/audio/${audioId}`);
-                if (response.ok) {
-                    const blob = await response.blob();
-                    playGeneratedAudio(blob);
+                try {
+                    const response = await fetchWithTimeout(`/api/history/audio/${audioId}`, {}, 30000);
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        playGeneratedAudio(blob);
+                    } else {
+                        showToast('Audio expired or unavailable', 'warning');
+                    }
+                } catch (err) {
+                    showToast('Failed to load audio: ' + err.message);
                 }
             });
         });
@@ -358,6 +425,7 @@ function initTextCounters() {
 let trimWavesurfer = null;
 let trimSampleIndex = null;
 let trimAudioId = null;
+let trimPreviewInterval = null;
 
 function showTrimModal(sampleIndex, audioId, blobUrl) {
     const modal = document.getElementById('trim-modal');
@@ -405,15 +473,17 @@ function initTrimModal() {
 
     previewBtn.addEventListener('click', () => {
         if (trimWavesurfer) {
+            if (trimPreviewInterval) clearInterval(trimPreviewInterval);
             const start = parseFloat(trimStart.value) || 0;
             const end = parseFloat(trimEnd.value) || trimWavesurfer.getDuration();
             trimWavesurfer.setTime(start);
             trimWavesurfer.play();
             // Stop at end time
-            const checkEnd = setInterval(() => {
-                if (trimWavesurfer.getCurrentTime() >= end) {
-                    trimWavesurfer.pause();
-                    clearInterval(checkEnd);
+            trimPreviewInterval = setInterval(() => {
+                if (!trimWavesurfer || trimWavesurfer.getCurrentTime() >= end) {
+                    if (trimWavesurfer) trimWavesurfer.pause();
+                    clearInterval(trimPreviewInterval);
+                    trimPreviewInterval = null;
                 }
             }, 100);
         }
@@ -441,7 +511,7 @@ function initTrimModal() {
 
             closeTrimModal();
         } catch (err) {
-            alert('Trim failed: ' + err.message);
+            showToast('Trim failed: ' + err.message);
         } finally {
             hideLoading();
         }
@@ -460,6 +530,10 @@ function initTrimModal() {
 function closeTrimModal() {
     const modal = document.getElementById('trim-modal');
     modal.classList.add('hidden');
+    if (trimPreviewInterval) {
+        clearInterval(trimPreviewInterval);
+        trimPreviewInterval = null;
+    }
     if (trimWavesurfer) {
         trimWavesurfer.pause();
     }
@@ -575,7 +649,7 @@ function initSTT() {
             } else {
                 message += err.message || 'Unknown error occurred.';
             }
-            alert(message);
+            showToast(message);
         }
     }
 
@@ -599,7 +673,7 @@ function initSTT() {
 
         try {
             showLoading();
-            const response = await fetch('/api/stt', {
+            const response = await fetchWithTimeout('/api/stt', {
                 method: 'POST',
                 body: formData
             });
@@ -614,7 +688,7 @@ function initSTT() {
             useTextBtn.disabled = !data.text;
         } catch (err) {
             console.error('Transcription error:', err);
-            alert('Transcription failed: ' + err.message);
+            showToast('Transcription failed: ' + err.message);
         } finally {
             hideLoading();
         }
@@ -675,14 +749,26 @@ function initVoiceClone() {
         e.preventDefault();
         uploadZone.classList.remove('dragover');
         const file = e.dataTransfer.files[0];
-        if (file && file.type.startsWith('audio/')) {
-            addSampleFromFile(file);
+        if (!file) return;
+        if (!file.type.startsWith('audio/')) {
+            showToast('Please drop an audio file (MP3, WAV, etc.)', 'warning');
+            return;
         }
+        if (file.size > MAX_UPLOAD_SIZE_MB * 1024 * 1024) {
+            showToast(`File too large. Maximum size is ${MAX_UPLOAD_SIZE_MB}MB.`, 'warning');
+            return;
+        }
+        addSampleFromFile(file);
     });
 
     audioInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (file) {
+            if (file.size > MAX_UPLOAD_SIZE_MB * 1024 * 1024) {
+                showToast(`File too large. Maximum size is ${MAX_UPLOAD_SIZE_MB}MB.`, 'warning');
+                audioInput.value = '';
+                return;
+            }
             addSampleFromFile(file);
             audioInput.value = ''; // Reset for same file selection
         }
@@ -762,7 +848,7 @@ function initVoiceClone() {
             } else {
                 message += err.message || 'Unknown error occurred.';
             }
-            alert(message);
+            showToast(message);
         }
     }
 
@@ -794,6 +880,10 @@ function initVoiceClone() {
     }
 
     function addSample(id, blobUrl, transcript) {
+        if (samples.length >= MAX_SAMPLES) {
+            showToast(`Maximum ${MAX_SAMPLES} samples allowed. Remove one to add more.`, 'warning');
+            return;
+        }
         samples.push({ id, blobUrl, transcript });
         renderSamples();
         updateGenerateButton();
@@ -878,16 +968,16 @@ function initVoiceClone() {
         formData.append('denoise', denoise.toString());
 
         try {
-            const response = await fetch('/api/audio/upload', {
+            const response = await fetchWithTimeout('/api/audio/upload', {
                 method: 'POST',
                 body: formData
-            });
+            }, 120000);
             const data = await response.json();
             if (data.error) throw new Error(data.error);
             return data;
         } catch (err) {
             console.error('Upload error:', err);
-            alert('Upload failed: ' + err.message);
+            showToast('Upload failed: ' + err.message);
             return null;
         }
     }
@@ -899,10 +989,10 @@ function initVoiceClone() {
         formData.append('denoise', denoise.toString());
 
         try {
-            const response = await fetch('/api/stt', {
+            const response = await fetchWithTimeout('/api/stt', {
                 method: 'POST',
                 body: formData
-            });
+            }, 120000);
             const data = await response.json();
             if (data.error) {
                 console.error('Transcription error:', data.error);
@@ -919,7 +1009,14 @@ function initVoiceClone() {
         const text = textInput.value.trim();
         const language = document.getElementById('clone-language').value;
 
-        if (!text || samples.length === 0) return;
+        if (!text) {
+            showToast('Please enter text to generate speech', 'warning');
+            return;
+        }
+        if (samples.length === 0) {
+            showToast('Please add at least one reference audio sample', 'warning');
+            return;
+        }
 
         // Collect all sample IDs and transcripts
         const refAudioIds = samples.map(s => s.id);
@@ -927,7 +1024,7 @@ function initVoiceClone() {
 
         try {
             showLoading();
-            const response = await fetch('/api/tts/clone', {
+            const response = await fetchWithTimeout('/api/tts/clone', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -940,8 +1037,8 @@ function initVoiceClone() {
             });
 
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || 'Generation failed');
+                const msg = await getErrorMessage(response, 'Generation failed');
+                throw new Error(msg);
             }
 
             currentJobId = response.headers.get('X-Job-Id');
@@ -954,7 +1051,7 @@ function initVoiceClone() {
             }
         } catch (err) {
             console.error('Generation error:', err);
-            alert('Generation failed: ' + err.message);
+            showToast('Generation failed: ' + err.message);
         } finally {
             hideLoading();
         }
@@ -1004,14 +1101,14 @@ function initVoiceClone() {
             const data = await response.json();
             if (data.error) throw new Error(data.error);
 
-            alert(`Imported profile "${data.name}"`);
+            showToast(`Imported profile "${data.name}"`, 'success');
             await loadProfilesList();
             profileSelect.value = data.id;
             profileLoadBtn.disabled = false;
             profileExportBtn.disabled = false;
             profileDeleteBtn.disabled = false;
         } catch (err) {
-            alert('Import failed: ' + err.message);
+            showToast('Import failed: ' + err.message);
         } finally {
             hideLoading();
             profileImportInput.value = '';
@@ -1043,7 +1140,7 @@ function initVoiceClone() {
 
     async function saveProfile() {
         if (samples.length === 0) {
-            alert('Add at least one sample first');
+            showToast('Add at least one sample first', 'warning');
             return;
         }
 
@@ -1069,7 +1166,7 @@ function initVoiceClone() {
                 throw new Error(data.error);
             }
 
-            alert(`Profile "${name}" saved successfully!`);
+            showToast(`Profile "${name}" saved`, 'success');
             await loadProfilesList();
 
             // Select the newly created profile
@@ -1078,7 +1175,7 @@ function initVoiceClone() {
             profileDeleteBtn.disabled = false;
         } catch (err) {
             console.error('Error saving profile:', err);
-            alert('Failed to save profile: ' + err.message);
+            showToast('Failed to save profile: ' + err.message);
         } finally {
             hideLoading();
         }
@@ -1124,10 +1221,10 @@ function initVoiceClone() {
             renderSamples();
             updateGenerateButton();
             updateProfileButtons();
-            alert(`Loaded profile "${data.profile_name}" with ${samples.length} samples`);
+            showToast(`Loaded profile "${data.profile_name}" with ${samples.length} samples`, 'success');
         } catch (err) {
             console.error('Error loading profile:', err);
-            alert('Failed to load profile: ' + err.message);
+            showToast('Failed to load profile: ' + err.message);
         } finally {
             hideLoading();
         }
@@ -1159,10 +1256,10 @@ function initVoiceClone() {
             profileSelect.value = '';
             profileLoadBtn.disabled = true;
             profileDeleteBtn.disabled = true;
-            alert('Profile deleted');
+            showToast('Profile deleted', 'success');
         } catch (err) {
             console.error('Error deleting profile:', err);
-            alert('Failed to delete profile: ' + err.message);
+            showToast('Failed to delete profile: ' + err.message);
         } finally {
             hideLoading();
         }
@@ -1199,11 +1296,14 @@ function initCustomVoice() {
         const speaker = document.getElementById('custom-speaker').value;
         const instruct = document.getElementById('custom-instruct').value.trim();
 
-        if (!text) return;
+        if (!text) {
+            showToast('Please enter text to generate speech', 'warning');
+            return;
+        }
 
         try {
             showLoading();
-            const response = await fetch('/api/tts/custom', {
+            const response = await fetchWithTimeout('/api/tts/custom', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1216,8 +1316,8 @@ function initCustomVoice() {
             });
 
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || 'Generation failed');
+                const msg = await getErrorMessage(response, 'Generation failed');
+                throw new Error(msg);
             }
 
             currentJobId = response.headers.get('X-Job-Id');
@@ -1230,7 +1330,7 @@ function initCustomVoice() {
             }
         } catch (err) {
             console.error('Generation error:', err);
-            alert('Generation failed: ' + err.message);
+            showToast('Generation failed: ' + err.message);
         } finally {
             hideLoading();
         }
@@ -1257,11 +1357,18 @@ function initVoiceDesign() {
         const language = document.getElementById('design-language').value;
         const instruct = instructInput.value.trim();
 
-        if (!text || !instruct) return;
+        if (!text) {
+            showToast('Please enter text to generate speech', 'warning');
+            return;
+        }
+        if (!instruct) {
+            showToast('Please enter a voice description', 'warning');
+            return;
+        }
 
         try {
             showLoading();
-            const response = await fetch('/api/tts/design', {
+            const response = await fetchWithTimeout('/api/tts/design', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1272,8 +1379,8 @@ function initVoiceDesign() {
             });
 
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || 'Generation failed');
+                const msg = await getErrorMessage(response, 'Generation failed');
+                throw new Error(msg);
             }
 
             currentJobId = response.headers.get('X-Job-Id');
@@ -1286,7 +1393,7 @@ function initVoiceDesign() {
             }
         } catch (err) {
             console.error('Generation error:', err);
-            alert('Generation failed: ' + err.message);
+            showToast('Generation failed: ' + err.message);
         } finally {
             hideLoading();
         }
@@ -1328,10 +1435,28 @@ function initChatterbox() {
         e.preventDefault();
         uploadZone.classList.remove('dragover');
         const file = e.dataTransfer.files[0];
-        if (file && file.type.startsWith('audio/')) uploadRefAudio(file);
+        if (!file) return;
+        if (!file.type.startsWith('audio/')) {
+            showToast('Please drop an audio file (MP3, WAV, etc.)', 'warning');
+            return;
+        }
+        if (file.size > MAX_UPLOAD_SIZE_MB * 1024 * 1024) {
+            showToast(`File too large. Maximum size is ${MAX_UPLOAD_SIZE_MB}MB.`, 'warning');
+            return;
+        }
+        uploadRefAudio(file);
     });
     audioInput.addEventListener('change', (e) => {
-        if (e.target.files[0]) { uploadRefAudio(e.target.files[0]); audioInput.value = ''; }
+        const file = e.target.files[0];
+        if (file) {
+            if (file.size > MAX_UPLOAD_SIZE_MB * 1024 * 1024) {
+                showToast(`File too large. Maximum size is ${MAX_UPLOAD_SIZE_MB}MB.`, 'warning');
+                audioInput.value = '';
+                return;
+            }
+            uploadRefAudio(file);
+            audioInput.value = '';
+        }
     });
     refRemove.addEventListener('click', () => {
         refAudioId = null;
@@ -1345,7 +1470,7 @@ function initChatterbox() {
         formData.append('denoise', 'true');
         try {
             showLoading();
-            const response = await fetch('/api/audio/upload', { method: 'POST', body: formData });
+            const response = await fetchWithTimeout('/api/audio/upload', { method: 'POST', body: formData }, 120000);
             const data = await response.json();
             if (data.error) throw new Error(data.error);
             refAudioId = data.id;
@@ -1353,7 +1478,7 @@ function initChatterbox() {
             refPreview.classList.remove('hidden');
             uploadZone.classList.add('hidden');
         } catch (err) {
-            alert('Upload failed: ' + err.message);
+            showToast('Upload failed: ' + err.message);
         } finally {
             hideLoading();
         }
@@ -1365,7 +1490,10 @@ function initChatterbox() {
 
     async function generateChatterbox() {
         const text = textInput.value.trim();
-        if (!text) return;
+        if (!text) {
+            showToast('Please enter text to generate speech', 'warning');
+            return;
+        }
 
         const languageId = document.getElementById('chatterbox-language').value;
         const exaggeration = parseFloat(exaggerationSlider.value);
@@ -1373,7 +1501,7 @@ function initChatterbox() {
 
         try {
             showLoading();
-            const response = await fetch('/api/tts/chatterbox/generate', {
+            const response = await fetchWithTimeout('/api/tts/chatterbox/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1383,8 +1511,8 @@ function initChatterbox() {
             });
 
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || 'Generation failed');
+                const msg = await getErrorMessage(response, 'Generation failed');
+                throw new Error(msg);
             }
 
             currentJobId = response.headers.get('X-Job-Id');
@@ -1396,7 +1524,7 @@ function initChatterbox() {
                     { exaggeration, cfg_weight: cfgWeight }, currentJobId);
             }
         } catch (err) {
-            alert('Generation failed: ' + err.message);
+            showToast('Generation failed: ' + err.message);
         } finally {
             hideLoading();
         }
@@ -1436,7 +1564,15 @@ function initAudioPlayer() {
 
     wavesurfer.on('ready', () => {
         playBtn.disabled = false;
+        downloadBtn.disabled = !currentJobId && !currentAudioBlob;
         updateTimeDisplay();
+    });
+
+    wavesurfer.on('error', (err) => {
+        console.error('WaveSurfer error:', err);
+        playBtn.disabled = true;
+        downloadBtn.disabled = true;
+        showToast('Failed to load audio for playback');
     });
 
     wavesurfer.on('audioprocess', updateTimeDisplay);
@@ -1460,11 +1596,44 @@ function initAudioPlayer() {
         }
     });
 
-    downloadBtn.addEventListener('click', () => {
+    downloadBtn.addEventListener('click', async () => {
+        // Prefer downloading via job ID from server (original quality)
         if (currentJobId) {
-            window.location.href = `/api/tts/download/${currentJobId}`;
+            downloadBtn.disabled = true;
+            try {
+                const response = await fetchWithTimeout(`/api/tts/download/${currentJobId}`, {}, 60000);
+                if (!response.ok) {
+                    // Job expired from cache — fall back to blob if available
+                    if (currentAudioBlob) {
+                        downloadBlob(currentAudioBlob);
+                        return;
+                    }
+                    throw new Error('Audio expired. Please generate again.');
+                }
+                const blob = await response.blob();
+                downloadBlob(blob);
+            } catch (err) {
+                showToast('Download failed: ' + err.message);
+            } finally {
+                downloadBtn.disabled = false;
+            }
+        } else if (currentAudioBlob) {
+            downloadBlob(currentAudioBlob);
+        } else {
+            showToast('No audio to download', 'warning');
         }
     });
+}
+
+function downloadBlob(blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `generated_${Date.now()}.wav`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 function updateTimeDisplay() {
@@ -1476,15 +1645,21 @@ function updateTimeDisplay() {
 }
 
 function playGeneratedAudio(blob) {
+    currentAudioBlob = blob;
     const url = URL.createObjectURL(blob);
+
+    // Keep buttons disabled until WaveSurfer signals ready
+    playBtn.disabled = true;
+    downloadBtn.disabled = true;
+
     if (wavesurfer) {
         wavesurfer.load(url);
         wavesurfer.once('ready', () => {
+            playBtn.disabled = false;
+            downloadBtn.disabled = false;
             wavesurfer.play();
         });
     }
-    playBtn.disabled = false;
-    downloadBtn.disabled = false;
 }
 
 function formatTime(seconds) {

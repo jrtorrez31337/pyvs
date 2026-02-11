@@ -211,7 +211,8 @@ def tts_clone_stream():
                 yield f"<!--JOB_ID:{job_id}-->".encode()
 
         except Exception as e:
-            print(f"Streaming error: {e}")
+            print(f"Streaming clone error: {e}")
+            yield f"<!--ERROR:{str(e)}-->".encode()
 
     return Response(
         generate(),
@@ -312,7 +313,8 @@ def tts_custom_stream():
                 yield f"<!--JOB_ID:{job_id}-->".encode()
 
         except Exception as e:
-            print(f"Streaming error: {e}")
+            print(f"Streaming custom error: {e}")
+            yield f"<!--ERROR:{str(e)}-->".encode()
 
     return Response(
         generate(),
@@ -409,7 +411,8 @@ def tts_design_stream():
                 yield f"<!--JOB_ID:{job_id}-->".encode()
 
         except Exception as e:
-            print(f"Streaming error: {e}")
+            print(f"Streaming design error: {e}")
+            yield f"<!--ERROR:{str(e)}-->".encode()
 
     return Response(
         generate(),
