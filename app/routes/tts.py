@@ -86,6 +86,40 @@ def _validate_instruct(instruct):
     return None
 
 
+def _resolve_reference_audio(data, required=False):
+    """Resolve reference audio ids/texts from request JSON."""
+    ref_audio_ids = data.get('ref_audio_ids') or []
+    ref_texts = data.get('ref_texts') or []
+    if not isinstance(ref_audio_ids, list):
+        ref_audio_ids = []
+    if not isinstance(ref_texts, list):
+        ref_texts = []
+
+    # Backwards compatibility: single sample fields
+    if not ref_audio_ids and data.get('ref_audio_id'):
+        ref_audio_ids = [data.get('ref_audio_id')]
+        ref_texts = [data.get('ref_text')]
+
+    if required and not ref_audio_ids:
+        return None, None, ('At least one reference audio is required', 400)
+
+    for audio_id in ref_audio_ids:
+        if not is_valid_audio_id(audio_id):
+            return None, None, (f'Invalid audio ID: {audio_id}', 400)
+
+    ref_audio_paths = []
+    for audio_id in ref_audio_ids:
+        path = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{audio_id}.wav")
+        if not os.path.exists(path):
+            return None, None, (f'Reference audio not found: {audio_id}', 404)
+        ref_audio_paths.append(path)
+
+    while len(ref_texts) < len(ref_audio_paths):
+        ref_texts.append(None)
+
+    return ref_audio_paths, ref_texts, None
+
+
 @bp.route('/clone', methods=['POST'])
 def tts_clone():
     """Generate speech using voice cloning with one or more reference samples"""
@@ -96,40 +130,12 @@ def tts_clone():
     text = data.get('text')
     language = data.get('language', 'English')
 
-    # Support both single and multiple reference samples
-    ref_audio_ids = data.get('ref_audio_ids') or []
-    ref_texts = data.get('ref_texts') or []
-    if not isinstance(ref_audio_ids, list):
-        ref_audio_ids = []
-    if not isinstance(ref_texts, list):
-        ref_texts = []
-
-    # Backwards compatibility: single sample
-    if not ref_audio_ids and data.get('ref_audio_id'):
-        ref_audio_ids = [data.get('ref_audio_id')]
-        ref_texts = [data.get('ref_text')]
-
     err = _validate_text(text)
     if err:
         return jsonify({'error': err}), 400
-    if not ref_audio_ids:
-        return jsonify({'error': 'At least one reference audio is required'}), 400
-
-    for audio_id in ref_audio_ids:
-        if not is_valid_audio_id(audio_id):
-            return jsonify({'error': f'Invalid audio ID: {audio_id}'}), 400
-
-    # Get reference audio paths
-    ref_audio_paths = []
-    for audio_id in ref_audio_ids:
-        path = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{audio_id}.wav")
-        if not os.path.exists(path):
-            return jsonify({'error': f'Reference audio not found: {audio_id}'}), 404
-        ref_audio_paths.append(path)
-
-    # Normalize ref_texts to match length
-    while len(ref_texts) < len(ref_audio_paths):
-        ref_texts.append(None)
+    ref_audio_paths, ref_texts, ref_err = _resolve_reference_audio(data, required=True)
+    if ref_err:
+        return jsonify({'error': ref_err[0]}), ref_err[1]
 
     fast = data.get('fast', False)
 
@@ -166,32 +172,12 @@ def tts_clone_stream():
 
     text = data.get('text')
     language = data.get('language', 'English')
-    ref_audio_ids = data.get('ref_audio_ids') or []
-    ref_texts = data.get('ref_texts') or []
-    if not isinstance(ref_audio_ids, list):
-        ref_audio_ids = []
-    if not isinstance(ref_texts, list):
-        ref_texts = []
-
     err = _validate_text(text)
     if err:
         return jsonify({'error': err}), 400
-    if not ref_audio_ids:
-        return jsonify({'error': 'At least one reference audio is required'}), 400
-
-    for audio_id in ref_audio_ids:
-        if not is_valid_audio_id(audio_id):
-            return jsonify({'error': f'Invalid audio ID: {audio_id}'}), 400
-
-    ref_audio_paths = []
-    for audio_id in ref_audio_ids:
-        path = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{audio_id}.wav")
-        if not os.path.exists(path):
-            return jsonify({'error': f'Reference audio not found: {audio_id}'}), 404
-        ref_audio_paths.append(path)
-
-    while len(ref_texts) < len(ref_audio_paths):
-        ref_texts.append(None)
+    ref_audio_paths, ref_texts, ref_err = _resolve_reference_audio(data, required=True)
+    if ref_err:
+        return jsonify({'error': ref_err[0]}), ref_err[1]
 
     fast = data.get('fast', False)
 
@@ -257,9 +243,20 @@ def tts_custom():
         return jsonify({'error': err}), 400
     if not speaker:
         return jsonify({'error': 'Speaker is required'}), 400
+    ref_audio_paths, ref_texts, ref_err = _resolve_reference_audio(data, required=False)
+    if ref_err:
+        return jsonify({'error': ref_err[0]}), ref_err[1]
 
     try:
-        wav, sr = tts_service.generate_custom(text, language, speaker, instruct, fast=fast)
+        wav, sr = tts_service.generate_custom(
+            text,
+            language,
+            speaker,
+            instruct,
+            fast=fast,
+            ref_audio_paths=ref_audio_paths,
+            ref_texts=ref_texts,
+        )
 
         # Store for download
         job_id = str(uuid.uuid4())
@@ -303,6 +300,9 @@ def tts_custom_stream():
         return jsonify({'error': err}), 400
     if not speaker:
         return jsonify({'error': 'Speaker is required'}), 400
+    ref_audio_paths, ref_texts, ref_err = _resolve_reference_audio(data, required=False)
+    if ref_err:
+        return jsonify({'error': ref_err[0]}), ref_err[1]
 
     def generate():
         header_sent = False
@@ -311,7 +311,13 @@ def tts_custom_stream():
 
         try:
             for chunk, sr in tts_service.generate_custom_streaming(
-                text, language, speaker, instruct, fast=fast
+                text,
+                language,
+                speaker,
+                instruct,
+                fast=fast,
+                ref_audio_paths=ref_audio_paths,
+                ref_texts=ref_texts,
             ):
                 if not header_sent:
                     sample_rate = sr
@@ -361,9 +367,18 @@ def tts_design():
         return jsonify({'error': err}), 400
     if not instruct:
         return jsonify({'error': 'Voice design instruction is required'}), 400
+    ref_audio_paths, ref_texts, ref_err = _resolve_reference_audio(data, required=False)
+    if ref_err:
+        return jsonify({'error': ref_err[0]}), ref_err[1]
 
     try:
-        wav, sr = tts_service.generate_design(text, language, instruct)
+        wav, sr = tts_service.generate_design(
+            text,
+            language,
+            instruct,
+            ref_audio_paths=ref_audio_paths,
+            ref_texts=ref_texts,
+        )
 
         # Store for download
         job_id = str(uuid.uuid4())
@@ -405,6 +420,9 @@ def tts_design_stream():
         return jsonify({'error': err}), 400
     if not instruct:
         return jsonify({'error': 'Voice design instruction is required'}), 400
+    ref_audio_paths, ref_texts, ref_err = _resolve_reference_audio(data, required=False)
+    if ref_err:
+        return jsonify({'error': ref_err[0]}), ref_err[1]
 
     def generate():
         header_sent = False
@@ -413,7 +431,11 @@ def tts_design_stream():
 
         try:
             for chunk, sr in tts_service.generate_design_streaming(
-                text, language, instruct
+                text,
+                language,
+                instruct,
+                ref_audio_paths=ref_audio_paths,
+                ref_texts=ref_texts,
             ):
                 if not header_sent:
                     sample_rate = sr

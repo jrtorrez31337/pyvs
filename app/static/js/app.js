@@ -10,6 +10,8 @@ const HISTORY_DISPLAY_LIMIT = 10;
 const MAX_UPLOAD_SIZE_MB = 50;
 const MAX_SAMPLES = 10;
 const FETCH_TIMEOUT_MS = 300000; // 5 minutes for TTS generation
+const MIN_SAMPLE_RATE = 3000;
+const MAX_SAMPLE_RATE = 768000;
 
 // State
 let currentMode = 'stt';
@@ -58,6 +60,13 @@ async function getErrorMessage(response, fallback = 'Request failed') {
     } catch {
         return fallback;
     }
+}
+
+function getCloneSamples() {
+    if (typeof window._getCloneSamplesImpl !== 'function') {
+        return [];
+    }
+    return window._getCloneSamplesImpl();
 }
 
 // Streaming audio player using Web Audio API
@@ -171,10 +180,41 @@ async function _doGenerateStreaming(endpoint, body, onComplete) {
             newBuffer.set(value, buffer.length);
             buffer = newBuffer;
 
-            // Skip WAV header (44 bytes)
+            // If the backend emitted an early marker instead of audio, surface it clearly.
+            if (!headerParsed && buffer.length >= 12) {
+                const probeSize = Math.min(buffer.length, 4096);
+                const probeText = new TextDecoder().decode(buffer.slice(0, probeSize));
+                const errorMatch = probeText.match(/<!--ERROR:([\s\S]+?)-->/);
+                if (errorMatch) {
+                    throw new Error((errorMatch[1] || 'Generation failed').trim());
+                }
+            }
+
+            // Parse and validate WAV header before decoding audio data.
             if (!headerParsed && buffer.length >= WAV_HEADER_SIZE) {
-                const dataView = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-                streamSampleRate = dataView.getUint32(24, true);
+                const headerView = new DataView(buffer.buffer, buffer.byteOffset, WAV_HEADER_SIZE);
+                const riff = readAscii(headerView, 0, 4);
+                const wave = readAscii(headerView, 8, 4);
+                if (riff !== 'RIFF' || wave !== 'WAVE') {
+                    const probeSize = Math.min(buffer.length, 4096);
+                    const probeText = new TextDecoder().decode(buffer.slice(0, probeSize));
+                    const errorMatch = probeText.match(/<!--ERROR:([\s\S]+?)-->/);
+                    if (errorMatch) {
+                        throw new Error((errorMatch[1] || 'Generation failed').trim());
+                    }
+
+                    // Marker may be split across chunks; keep reading for a short window.
+                    if (probeText.startsWith('<!--ERROR:') && !probeText.includes('-->') && buffer.length < 4096) {
+                        continue;
+                    }
+                    throw new Error('Invalid audio stream header received from server');
+                }
+
+                streamSampleRate = headerView.getUint32(24, true);
+                if (streamSampleRate < MIN_SAMPLE_RATE || streamSampleRate > MAX_SAMPLE_RATE) {
+                    throw new Error(`Invalid stream sample rate in header: ${streamSampleRate}`);
+                }
+
                 streamingPlayer.sampleRate = streamSampleRate;
                 buffer = buffer.slice(WAV_HEADER_SIZE);
                 headerParsed = true;
@@ -194,11 +234,11 @@ async function _doGenerateStreaming(endpoint, body, onComplete) {
         // Process remaining buffer — check tail for backend markers
         let jobId = null;
         if (headerParsed && buffer.length >= 2) {
-            const checkSize = Math.min(100, buffer.length);
+            const checkSize = Math.min(4096, buffer.length);
             const tailText = new TextDecoder().decode(buffer.slice(buffer.length - checkSize));
 
-            const errorMatch = tailText.match(/<!--ERROR:(.+?)-->/);
-            if (errorMatch) throw new Error(errorMatch[1]);
+            const errorMatch = tailText.match(/<!--ERROR:([\s\S]+?)-->/);
+            if (errorMatch) throw new Error((errorMatch[1] || 'Generation failed').trim());
 
             const jobMatch = tailText.match(/<!--JOB_ID:([^>]+)-->/);
             let pcmEnd = buffer.length;
@@ -286,6 +326,14 @@ function writeString(view, offset, string) {
     for (let i = 0; i < string.length; i++) {
         view.setUint8(offset + i, string.charCodeAt(i));
     }
+}
+
+function readAscii(view, offset, length) {
+    let result = '';
+    for (let i = 0; i < length; i++) {
+        result += String.fromCharCode(view.getUint8(offset + i));
+    }
+    return result;
 }
 
 // Elements
@@ -804,6 +852,17 @@ function initVoiceClone() {
     const recordBtn = document.getElementById('clone-record-btn');
     const micBtn = document.getElementById('clone-mic-btn');
     const recordingIndicator = document.getElementById('clone-recording-indicator');
+    const cloneEngineSelect = document.getElementById('clone-engine');
+    const qwenLanguageGroup = document.getElementById('clone-qwen-language-group');
+    const chatterboxLanguageGroup = document.getElementById('clone-chatterbox-language-group');
+    const qwenOptions = document.getElementById('clone-qwen-options');
+    const chatterboxOptions = document.getElementById('clone-chatterbox-options');
+    const cloneExaggeration = document.getElementById('clone-exaggeration');
+    const cloneExaggerationValue = document.getElementById('clone-exaggeration-value');
+    const cloneCfg = document.getElementById('clone-cfg');
+    const cloneCfgValue = document.getElementById('clone-cfg-value');
+    const cloneTemperature = document.getElementById('clone-temperature');
+    const cloneTemperatureValue = document.getElementById('clone-temperature-value');
 
     // Profile elements
     const profileSelect = document.getElementById('profile-select');
@@ -813,9 +872,14 @@ function initVoiceClone() {
 
     // Multiple samples storage: [{id, blobUrl, transcript}, ...]
     let samples = [];
+    window._getCloneSamplesImpl = () => samples.map(sample => ({
+        id: sample.id,
+        transcript: sample.transcript || null,
+    }));
 
     // Initialize profiles
     loadProfilesList();
+    loadChatterboxLanguages();
     let cloneMediaRecorder = null;
     let cloneAudioChunks = [];
     let isCloneRecording = false;
@@ -832,6 +896,28 @@ function initVoiceClone() {
         uploadZone.classList.toggle('hidden', source !== 'upload');
         recordZone.classList.toggle('hidden', source !== 'record');
     }
+
+    function updateCloneEngineUI() {
+        const useChatterbox = cloneEngineSelect.value === 'chatterbox';
+        qwenLanguageGroup.classList.toggle('hidden', useChatterbox);
+        chatterboxLanguageGroup.classList.toggle('hidden', !useChatterbox);
+        qwenOptions.classList.toggle('hidden', useChatterbox);
+        chatterboxOptions.classList.toggle('hidden', !useChatterbox);
+    }
+
+    cloneEngineSelect.addEventListener('change', updateCloneEngineUI);
+
+    cloneExaggeration.addEventListener('input', () => {
+        cloneExaggerationValue.textContent = cloneExaggeration.value;
+    });
+    cloneCfg.addEventListener('input', () => {
+        cloneCfgValue.textContent = cloneCfg.value;
+    });
+    cloneTemperature.addEventListener('input', () => {
+        cloneTemperatureValue.textContent = cloneTemperature.value;
+    });
+
+    updateCloneEngineUI();
 
     // Upload zone events
     uploadZone.addEventListener('click', () => audioInput.click());
@@ -1116,7 +1202,7 @@ function initVoiceClone() {
             return;
         }
         const texts = getTextsForMode('clone');
-        const language = document.getElementById('clone-language').value;
+        const engine = cloneEngineSelect.value;
 
         if (texts.length === 0) {
             showToast('Please enter text to generate speech', 'warning');
@@ -1130,15 +1216,84 @@ function initVoiceClone() {
         const refAudioIds = samples.map(s => s.id);
         const refTexts = samples.map(s => s.transcript || null);
         const fast = document.getElementById('clone-fast-mode').checked;
+        const qwenLanguage = document.getElementById('clone-language').value;
+        const chatterboxLanguage = document.getElementById('clone-chatterbox-language').value || 'en';
+        const exaggeration = parseFloat(cloneExaggeration.value);
+        const cfgWeight = parseFloat(cloneCfg.value);
+        const temperature = parseFloat(cloneTemperature.value);
 
         isGenerating = true;
         try {
+            if (engine === 'chatterbox' && samples.length > 1) {
+                showToast('Chatterbox clone uses Sample 1 as the reference voice.', 'info', 3500);
+            }
+
             for (const text of texts) {
-                await _doGenerateStreaming('/api/tts/clone/stream', {
-                    text, language, ref_audio_ids: refAudioIds, ref_texts: refTexts, fast
-                }, (jobId) => {
-                    if (jobId) window.addToHistory('clone', text, language, { samples: samples.length }, jobId);
-                });
+                if (engine === 'chatterbox') {
+                    showLoading();
+                    try {
+                        const response = await fetchWithTimeout('/api/tts/chatterbox/generate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                text,
+                                language_id: chatterboxLanguage,
+                                ref_audio_id: refAudioIds[0],
+                                exaggeration,
+                                cfg_weight: cfgWeight,
+                                temperature,
+                            })
+                        });
+
+                        if (!response.ok) {
+                            const msg = await getErrorMessage(response, 'Generation failed');
+                            throw new Error(msg);
+                        }
+
+                        currentJobId = response.headers.get('X-Job-Id');
+                        const audioBlob = await response.blob();
+                        playGeneratedAudio(audioBlob);
+
+                        if (currentJobId) {
+                            window.addToHistory(
+                                'clone',
+                                text,
+                                chatterboxLanguage,
+                                {
+                                    engine: 'chatterbox',
+                                    samples: samples.length,
+                                    exaggeration,
+                                    cfg_weight: cfgWeight,
+                                    temperature,
+                                    ref_sample_index: 0,
+                                },
+                                currentJobId
+                            );
+                        }
+                    } catch (err) {
+                        showToast('Generation failed: ' + err.message);
+                    } finally {
+                        hideLoading();
+                    }
+                } else {
+                    await _doGenerateStreaming('/api/tts/clone/stream', {
+                        text,
+                        language: qwenLanguage,
+                        ref_audio_ids: refAudioIds,
+                        ref_texts: refTexts,
+                        fast
+                    }, (jobId) => {
+                        if (jobId) {
+                            window.addToHistory(
+                                'clone',
+                                text,
+                                qwenLanguage,
+                                { engine: 'qwen', samples: samples.length, fast },
+                                jobId
+                            );
+                        }
+                    });
+                }
             }
             if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
         } finally {
@@ -1377,6 +1532,7 @@ function initCustomVoice() {
         const language = document.getElementById('custom-language').value;
         const speaker = document.getElementById('custom-speaker').value;
         const instruct = document.getElementById('custom-instruct').value.trim();
+        const useClone = document.getElementById('custom-use-clone').checked;
 
         if (texts.length === 0) {
             showToast('Please enter text to generate speech', 'warning');
@@ -1384,14 +1540,34 @@ function initCustomVoice() {
         }
 
         const fast = document.getElementById('custom-fast-mode').checked;
+        const cloneSamples = useClone ? getCloneSamples() : [];
+        if (useClone && cloneSamples.length === 0) {
+            showToast('Add reference samples in Voice Clone tab first', 'warning');
+            return;
+        }
 
         isGenerating = true;
         try {
+            if (useClone) {
+                showToast('Applying clone reference conditioning with Custom Voice controls.', 'info', 3000);
+            }
             for (const text of texts) {
                 await _doGenerateStreaming('/api/tts/custom/stream', {
-                    text, language, speaker, instruct: instruct || null, fast
+                    text,
+                    language,
+                    speaker,
+                    instruct: instruct || null,
+                    fast,
+                    ref_audio_ids: useClone ? cloneSamples.map(s => s.id) : [],
+                    ref_texts: useClone ? cloneSamples.map(s => s.transcript) : [],
                 }, (jobId) => {
-                    if (jobId) window.addToHistory('custom', text, language, { speaker }, jobId);
+                    if (jobId) {
+                        window.addToHistory('custom', text, language, {
+                            speaker,
+                            instruct: instruct || null,
+                            via_clone: useClone
+                        }, jobId);
+                    }
                 });
             }
             if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
@@ -1406,15 +1582,19 @@ function initVoiceDesign() {
     const generateBtn = document.getElementById('design-generate-btn');
     const textInput = document.getElementById('design-text');
     const instructInput = document.getElementById('design-instruct');
+    const useCloneToggle = document.getElementById('design-use-clone');
 
     generateBtn.addEventListener('click', generateDesign);
 
     function updateButtonState() {
-        generateBtn.disabled = !textInput.value.trim() || !instructInput.value.trim();
+        const hasText = !!textInput.value.trim();
+        const hasInstruct = !!instructInput.value.trim();
+        generateBtn.disabled = !hasText || !hasInstruct;
     }
 
     textInput.addEventListener('input', updateButtonState);
     instructInput.addEventListener('input', updateButtonState);
+    useCloneToggle.addEventListener('change', updateButtonState);
 
     async function generateDesign() {
         if (isGenerating) {
@@ -1424,9 +1604,15 @@ function initVoiceDesign() {
         const texts = getTextsForMode('design');
         const language = document.getElementById('design-language').value;
         const instruct = instructInput.value.trim();
+        const useClone = useCloneToggle.checked;
+        const cloneSamples = useClone ? getCloneSamples() : [];
 
         if (!texts.length) {
             showToast('Please enter text to generate speech', 'warning');
+            return;
+        }
+        if (useClone && cloneSamples.length === 0) {
+            showToast('Add reference samples in Voice Clone tab first', 'warning');
             return;
         }
         if (!instruct) {
@@ -1436,13 +1622,18 @@ function initVoiceDesign() {
 
         isGenerating = true;
         try {
+            if (useClone) {
+                showToast('Applying clone reference conditioning with Voice Design instruction.', 'info', 3000);
+            }
             for (const text of texts) {
                 await _doGenerateStreaming('/api/tts/design/stream', {
                     text,
                     language,
-                    instruct
+                    instruct,
+                    ref_audio_ids: useClone ? cloneSamples.map(s => s.id) : [],
+                    ref_texts: useClone ? cloneSamples.map(s => s.transcript) : [],
                 }, (jobId) => {
-                    if (jobId) window.addToHistory('design', text, language, { instruct }, jobId);
+                    if (jobId) window.addToHistory('design', text, language, { instruct, via_clone: useClone }, jobId);
                 });
             }
             if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
@@ -1450,6 +1641,8 @@ function initVoiceDesign() {
             isGenerating = false;
         }
     }
+
+    updateButtonState();
 }
 
 // Chatterbox Mode
@@ -1465,6 +1658,7 @@ function initChatterbox() {
     const refPreview = document.getElementById('chatterbox-ref-preview');
     const refAudio = document.getElementById('chatterbox-ref-audio');
     const refRemove = document.getElementById('chatterbox-ref-remove');
+    const useCloneRefToggle = document.getElementById('chatterbox-use-clone-ref');
 
     let refAudioId = null;
 
@@ -1561,6 +1755,13 @@ function initChatterbox() {
         const languageId = document.getElementById('chatterbox-language').value;
         const exaggeration = parseFloat(exaggerationSlider.value);
         const cfgWeight = parseFloat(cfgSlider.value);
+        const useCloneRef = useCloneRefToggle.checked;
+        const cloneSamples = useCloneRef ? getCloneSamples() : [];
+        const effectiveRefAudioId = useCloneRef ? (cloneSamples[0]?.id || null) : refAudioId;
+        if (useCloneRef && !effectiveRefAudioId) {
+            showToast('Add reference samples in Voice Clone tab first', 'warning');
+            return;
+        }
 
         isGenerating = true;
         currentJobId = null;
@@ -1573,7 +1774,7 @@ function initChatterbox() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     text, language_id: languageId, exaggeration,
-                    cfg_weight: cfgWeight, ref_audio_id: refAudioId,
+                    cfg_weight: cfgWeight, ref_audio_id: effectiveRefAudioId,
                 })
             });
 
@@ -1588,7 +1789,7 @@ function initChatterbox() {
 
             if (currentJobId) {
                 window.addToHistory('chatterbox', text, languageId,
-                    { exaggeration, cfg_weight: cfgWeight }, currentJobId);
+                    { exaggeration, cfg_weight: cfgWeight, via_clone_ref: useCloneRef }, currentJobId);
             }
         } catch (err) {
             showToast('Generation failed: ' + err.message);
@@ -1603,13 +1804,24 @@ async function loadChatterboxLanguages() {
     try {
         const response = await fetch('/api/tts/chatterbox/languages');
         const languages = await response.json();
-        const select = document.getElementById('chatterbox-language');
-        languages.forEach(lang => {
-            const option = document.createElement('option');
-            option.value = lang.id;
-            option.textContent = lang.name;
-            if (lang.id === 'en') option.selected = true;
-            select.appendChild(option);
+        const selectIds = ['chatterbox-language', 'clone-chatterbox-language'];
+
+        selectIds.forEach((selectId) => {
+            const select = document.getElementById(selectId);
+            if (!select) return;
+
+            const previous = select.value;
+            select.innerHTML = '';
+
+            languages.forEach(lang => {
+                const option = document.createElement('option');
+                option.value = lang.id;
+                option.textContent = lang.name;
+                if ((previous && previous === lang.id) || (!previous && lang.id === 'en')) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
         });
     } catch (err) {
         console.error('Error loading Chatterbox languages:', err);

@@ -120,8 +120,22 @@
 
                     <div class="form-row">
                         <div class="form-group">
+                            <label>Clone Engine:</label>
+                            <select id="clone-engine">
+                                <option value="qwen" selected>Qwen Clone</option>
+                                <option value="chatterbox">Chatterbox Clone (Expressive)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group" id="clone-qwen-language-group">
                             <label>Language:</label>
                             <select id="clone-language"></select>
+                        </div>
+                        <div class="form-group hidden" id="clone-chatterbox-language-group">
+                            <label>Language:</label>
+                            <select id="clone-chatterbox-language"></select>
                         </div>
                     </div>
 
@@ -139,11 +153,22 @@
                         </div>
                     </div>
 
-                    <div class="form-group">
+                    <div class="form-group" id="clone-qwen-options">
                         <label class="toggle-option">
                             <input type="checkbox" id="clone-fast-mode">
                             <span>Fast Mode (0.6B — faster, slightly lower quality)</span>
                         </label>
+                    </div>
+
+                    <div class="form-group hidden" id="clone-chatterbox-options">
+                        <label>Emotion Exaggeration: <span id="clone-exaggeration-value">0.5</span></label>
+                        <input type="range" id="clone-exaggeration" min="0" max="2" step="0.05" value="0.5" class="slider">
+
+                        <label style="margin-top: 0.75rem;">Speaker Adherence (CFG): <span id="clone-cfg-value">0.5</span></label>
+                        <input type="range" id="clone-cfg" min="0" max="1" step="0.05" value="0.5" class="slider">
+
+                        <label style="margin-top: 0.75rem;">Temperature: <span id="clone-temperature-value">0.8</span></label>
+                        <input type="range" id="clone-temperature" min="0.05" max="2" step="0.05" value="0.8" class="slider">
                     </div>
 
                     <button id="clone-generate-btn" class="generate-btn" disabled>Generate Speech</button>
@@ -191,6 +216,13 @@
                         </label>
                     </div>
 
+                    <div class="form-group">
+                        <label class="toggle-option">
+                            <input type="checkbox" id="custom-use-clone">
+                            <span>Use Voice Clone samples (from Voice Clone tab)</span>
+                        </label>
+                    </div>
+
                     <button id="custom-generate-btn" class="generate-btn">Generate Speech</button>
                 </div>
 
@@ -223,6 +255,13 @@
                         </div>
                     </div>
 
+                    <div class="form-group">
+                        <label class="toggle-option">
+                            <input type="checkbox" id="design-use-clone">
+                            <span>Use Voice Clone samples (from Voice Clone tab)</span>
+                        </label>
+                    </div>
+
                     <button id="design-generate-btn" class="generate-btn">Generate Speech</button>
                 </div>
 
@@ -243,6 +282,10 @@
                                 <p>Drop audio file or click to upload reference voice</p>
                             </div>
                         </div>
+                        <label class="toggle-option">
+                            <input type="checkbox" id="chatterbox-use-clone-ref">
+                            <span>Use first Voice Clone sample as reference</span>
+                        </label>
                     </div>
 
                     <div class="form-row">
