@@ -32,12 +32,12 @@ def upload_audio():
         save_path = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{audio_id}.wav")
 
         # Read and resave to ensure WAV format
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(audio_file.filename)[1]) as tmp:
-            audio_file.save(tmp.name)
-            tmp_path = tmp.name
-
+        tmp_path = None
         wav_path = None
         try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(audio_file.filename)[1]) as tmp:
+                audio_file.save(tmp.name)
+                tmp_path = tmp.name
             # Convert to WAV if needed (e.g. WebM from browser recording)
             wav_path = convert_to_wav(tmp_path)
 
@@ -60,7 +60,8 @@ def upload_audio():
             sf.write(save_path, data, sr)
 
         finally:
-            os.unlink(tmp_path)
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
             if wav_path and wav_path != tmp_path and os.path.exists(wav_path):
                 os.unlink(wav_path)
 

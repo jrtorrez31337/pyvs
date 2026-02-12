@@ -126,6 +126,14 @@ async function generateWithStreaming(endpoint, body, onComplete) {
         return;
     }
     isGenerating = true;
+    try {
+        await _doGenerateStreaming(endpoint, body, onComplete);
+    } finally {
+        isGenerating = false;
+    }
+}
+
+async function _doGenerateStreaming(endpoint, body, onComplete) {
     streamingPlayer.reset();
 
     // Clear stale audio state from previous generation
@@ -239,7 +247,6 @@ async function generateWithStreaming(endpoint, body, onComplete) {
         console.error('Streaming error:', err);
         showToast('Generation failed: ' + err.message);
     } finally {
-        isGenerating = false;
         hideLoading();
     }
 }
@@ -624,7 +631,7 @@ function closeTrimModal() {
         trimPreviewInterval = null;
     }
     if (trimWavesurfer) {
-        trimWavesurfer.destroy();
+        try { trimWavesurfer.destroy(); } catch (e) { /* ignore */ }
         trimWavesurfer = null;
     }
     trimSampleIndex = null;
@@ -1104,6 +1111,10 @@ function initVoiceClone() {
     }
 
     async function generateClone() {
+        if (isGenerating) {
+            showToast('Generation already in progress', 'warning');
+            return;
+        }
         const texts = getTextsForMode('clone');
         const language = document.getElementById('clone-language').value;
 
@@ -1120,14 +1131,19 @@ function initVoiceClone() {
         const refTexts = samples.map(s => s.transcript || null);
         const fast = document.getElementById('clone-fast-mode').checked;
 
-        for (const text of texts) {
-            await generateWithStreaming('/api/tts/clone/stream', {
-                text, language, ref_audio_ids: refAudioIds, ref_texts: refTexts, fast
-            }, (jobId) => {
-                if (jobId) window.addToHistory('clone', text, language, { samples: samples.length }, jobId);
-            });
+        isGenerating = true;
+        try {
+            for (const text of texts) {
+                await _doGenerateStreaming('/api/tts/clone/stream', {
+                    text, language, ref_audio_ids: refAudioIds, ref_texts: refTexts, fast
+                }, (jobId) => {
+                    if (jobId) window.addToHistory('clone', text, language, { samples: samples.length }, jobId);
+                });
+            }
+            if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
+        } finally {
+            isGenerating = false;
         }
-        if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
     }
 
     // ===== Profile Management =====
@@ -1353,6 +1369,10 @@ function initCustomVoice() {
     });
 
     async function generateCustom() {
+        if (isGenerating) {
+            showToast('Generation already in progress', 'warning');
+            return;
+        }
         const texts = getTextsForMode('custom');
         const language = document.getElementById('custom-language').value;
         const speaker = document.getElementById('custom-speaker').value;
@@ -1365,14 +1385,19 @@ function initCustomVoice() {
 
         const fast = document.getElementById('custom-fast-mode').checked;
 
-        for (const text of texts) {
-            await generateWithStreaming('/api/tts/custom/stream', {
-                text, language, speaker, instruct: instruct || null, fast
-            }, (jobId) => {
-                if (jobId) window.addToHistory('custom', text, language, { speaker }, jobId);
-            });
+        isGenerating = true;
+        try {
+            for (const text of texts) {
+                await _doGenerateStreaming('/api/tts/custom/stream', {
+                    text, language, speaker, instruct: instruct || null, fast
+                }, (jobId) => {
+                    if (jobId) window.addToHistory('custom', text, language, { speaker }, jobId);
+                });
+            }
+            if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
+        } finally {
+            isGenerating = false;
         }
-        if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
     }
 }
 
@@ -1392,6 +1417,10 @@ function initVoiceDesign() {
     instructInput.addEventListener('input', updateButtonState);
 
     async function generateDesign() {
+        if (isGenerating) {
+            showToast('Generation already in progress', 'warning');
+            return;
+        }
         const texts = getTextsForMode('design');
         const language = document.getElementById('design-language').value;
         const instruct = instructInput.value.trim();
@@ -1405,16 +1434,21 @@ function initVoiceDesign() {
             return;
         }
 
-        for (const text of texts) {
-            await generateWithStreaming('/api/tts/design/stream', {
-                text,
-                language,
-                instruct
-            }, (jobId) => {
-                if (jobId) window.addToHistory('design', text, language, { instruct }, jobId);
-            });
+        isGenerating = true;
+        try {
+            for (const text of texts) {
+                await _doGenerateStreaming('/api/tts/design/stream', {
+                    text,
+                    language,
+                    instruct
+                }, (jobId) => {
+                    if (jobId) window.addToHistory('design', text, language, { instruct }, jobId);
+                });
+            }
+            if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
+        } finally {
+            isGenerating = false;
         }
-        if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
     }
 }
 
@@ -1598,7 +1632,7 @@ function initAudioPlayer() {
 
     wavesurfer.on('ready', () => {
         playBtn.disabled = false;
-        downloadBtn.disabled = !currentJobId && !currentAudioBlob;
+        downloadBtn.disabled = !currentAudioBlob;
         updateTimeDisplay();
     });
 
