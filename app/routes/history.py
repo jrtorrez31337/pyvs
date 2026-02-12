@@ -1,8 +1,9 @@
 import io
 import os
 import uuid
+import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, current_app, send_file
 import soundfile as sf
 from app.config import MAX_HISTORY_ITEMS as MAX_HISTORY, is_valid_audio_id
@@ -32,7 +33,16 @@ def _persist_audio(audio_id):
     history_dir = get_history_dir()
     path = os.path.join(history_dir, f"{audio_id}.wav")
     if not os.path.exists(path):
-        sf.write(path, wav, sr, format='WAV')
+        # Atomic write: temp file then rename to prevent corruption from concurrent writes
+        fd, tmp_path = tempfile.mkstemp(suffix='.wav', dir=history_dir)
+        try:
+            os.close(fd)
+            sf.write(tmp_path, wav, sr, format='WAV')
+            os.replace(tmp_path, path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
 
 
 @bp.route('', methods=['GET'])
@@ -46,6 +56,8 @@ def list_history():
 def add_history():
     """Add item to history and persist its audio to disk."""
     data = request.get_json()
+    if data is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
 
     audio_id = data.get('audio_id')
 
@@ -56,7 +68,7 @@ def add_history():
         'language': data.get('language'),
         'params': data.get('params', {}),  # mode-specific params
         'audio_id': audio_id,
-        'created_at': datetime.utcnow().isoformat(),
+        'created_at': datetime.now(timezone.utc).isoformat(),
     }
 
     # Persist audio from cache to disk before it expires

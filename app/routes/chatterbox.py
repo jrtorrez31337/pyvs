@@ -15,13 +15,19 @@ bp = Blueprint('chatterbox', __name__, url_prefix='/api/tts/chatterbox')
 def chatterbox_generate():
     """Generate speech using Chatterbox TTS with optional voice cloning."""
     data = request.get_json()
+    if data is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
 
     text = data.get('text')
     language_id = data.get('language_id', 'en')
-    exaggeration = max(0.0, min(float(data.get('exaggeration', 0.5)), MAX_EXAGGERATION))
-    cfg_weight = max(0.0, min(1.0, float(data.get('cfg_weight', 0.5))))
-    temperature = max(0.05, min(2.0, float(data.get('temperature', 0.8))))
     ref_audio_id = data.get('ref_audio_id')
+
+    try:
+        exaggeration = max(0.0, min(float(data.get('exaggeration', 0.5)), MAX_EXAGGERATION))
+        cfg_weight = max(0.0, min(1.0, float(data.get('cfg_weight', 0.5))))
+        temperature = max(0.05, min(2.0, float(data.get('temperature', 0.8))))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'exaggeration, cfg_weight, and temperature must be numeric'}), 400
 
     err = _validate_text(text)
     if err:

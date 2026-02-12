@@ -18,6 +18,7 @@ let audioChunks = [];
 let isRecording = false;
 let currentJobId = null;
 let currentAudioBlob = null;
+let currentBlobUrl = null;
 
 // Toast notification system
 function showToast(message, type = 'error', duration = 5000) {
@@ -206,11 +207,16 @@ async function generateWithStreaming(endpoint, body, onComplete) {
         const wavBlob = buildWavBlob(allPcmChunks, streamSampleRate);
         currentAudioBlob = wavBlob;
 
+        // Revoke previous blob URL to prevent memory leak
+        if (currentBlobUrl) {
+            URL.revokeObjectURL(currentBlobUrl);
+        }
+        currentBlobUrl = URL.createObjectURL(wavBlob);
+
         // Load into WaveSurfer for waveform display and replay (don't auto-play — user already heard it live)
-        const wavUrl = URL.createObjectURL(wavBlob);
         playBtn.disabled = true;
         downloadBtn.disabled = true;
-        wavesurfer.load(wavUrl);
+        wavesurfer.load(currentBlobUrl);
         wavesurfer.once('ready', () => {
             playBtn.disabled = false;
             downloadBtn.disabled = false;
@@ -588,7 +594,8 @@ function closeTrimModal() {
         trimPreviewInterval = null;
     }
     if (trimWavesurfer) {
-        trimWavesurfer.pause();
+        trimWavesurfer.destroy();
+        trimWavesurfer = null;
     }
     trimSampleIndex = null;
     trimAudioId = null;
@@ -940,13 +947,14 @@ function initVoiceClone() {
         samples.push({ id, blobUrl, transcript });
         renderSamples();
         updateGenerateButton();
+        updateProfileButtons();
     }
 
     function removeSample(index) {
-        // TODO: Could also delete from server
         samples.splice(index, 1);
         renderSamples();
         updateGenerateButton();
+        updateProfileButtons();
     }
 
     function updateSampleTranscript(index, transcript) {
@@ -1059,10 +1067,10 @@ function initVoiceClone() {
     }
 
     async function generateClone() {
-        const text = textInput.value.trim();
+        const texts = getTextsForMode('clone');
         const language = document.getElementById('clone-language').value;
 
-        if (!text) {
+        if (texts.length === 0) {
             showToast('Please enter text to generate speech', 'warning');
             return;
         }
@@ -1073,16 +1081,16 @@ function initVoiceClone() {
 
         const refAudioIds = samples.map(s => s.id);
         const refTexts = samples.map(s => s.transcript || null);
+        const fast = document.getElementById('clone-fast-mode').checked;
 
-        await generateWithStreaming('/api/tts/clone/stream', {
-            text,
-            language,
-            ref_audio_ids: refAudioIds,
-            ref_texts: refTexts,
-            fast: document.getElementById('clone-fast-mode').checked
-        }, (jobId) => {
-            if (jobId) window.addToHistory('clone', text, language, { samples: samples.length }, jobId);
-        });
+        for (const text of texts) {
+            await generateWithStreaming('/api/tts/clone/stream', {
+                text, language, ref_audio_ids: refAudioIds, ref_texts: refTexts, fast
+            }, (jobId) => {
+                if (jobId) window.addToHistory('clone', text, language, { samples: samples.length }, jobId);
+            });
+        }
+        if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
     }
 
     // ===== Profile Management =====
@@ -1293,18 +1301,6 @@ function initVoiceClone() {
         }
     }
 
-    // Update save button when samples change
-    const originalAddSample = addSample;
-    addSample = function(id, blobUrl, transcript) {
-        originalAddSample(id, blobUrl, transcript);
-        updateProfileButtons();
-    };
-
-    const originalRemoveSample = removeSample;
-    removeSample = function(index) {
-        originalRemoveSample(index);
-        updateProfileButtons();
-    };
 }
 
 // Custom Voice Mode
@@ -1319,25 +1315,26 @@ function initCustomVoice() {
     });
 
     async function generateCustom() {
-        const text = textInput.value.trim();
+        const texts = getTextsForMode('custom');
         const language = document.getElementById('custom-language').value;
         const speaker = document.getElementById('custom-speaker').value;
         const instruct = document.getElementById('custom-instruct').value.trim();
 
-        if (!text) {
+        if (texts.length === 0) {
             showToast('Please enter text to generate speech', 'warning');
             return;
         }
 
-        await generateWithStreaming('/api/tts/custom/stream', {
-            text,
-            language,
-            speaker,
-            instruct: instruct || null,
-            fast: document.getElementById('custom-fast-mode').checked
-        }, (jobId) => {
-            if (jobId) window.addToHistory('custom', text, language, { speaker }, jobId);
-        });
+        const fast = document.getElementById('custom-fast-mode').checked;
+
+        for (const text of texts) {
+            await generateWithStreaming('/api/tts/custom/stream', {
+                text, language, speaker, instruct: instruct || null, fast
+            }, (jobId) => {
+                if (jobId) window.addToHistory('custom', text, language, { speaker }, jobId);
+            });
+        }
+        if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
     }
 }
 
@@ -1357,11 +1354,11 @@ function initVoiceDesign() {
     instructInput.addEventListener('input', updateButtonState);
 
     async function generateDesign() {
-        const text = textInput.value.trim();
+        const texts = getTextsForMode('design');
         const language = document.getElementById('design-language').value;
         const instruct = instructInput.value.trim();
 
-        if (!text) {
+        if (!texts.length) {
             showToast('Please enter text to generate speech', 'warning');
             return;
         }
@@ -1370,13 +1367,16 @@ function initVoiceDesign() {
             return;
         }
 
-        await generateWithStreaming('/api/tts/design/stream', {
-            text,
-            language,
-            instruct
-        }, (jobId) => {
-            if (jobId) window.addToHistory('design', text, language, { instruct }, jobId);
-        });
+        for (const text of texts) {
+            await generateWithStreaming('/api/tts/design/stream', {
+                text,
+                language,
+                instruct
+            }, (jobId) => {
+                if (jobId) window.addToHistory('design', text, language, { instruct }, jobId);
+            });
+        }
+        if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
     }
 }
 
@@ -1551,8 +1551,9 @@ function initAudioPlayer() {
     wavesurfer.on('error', (err) => {
         console.error('WaveSurfer error:', err);
         playBtn.disabled = true;
-        downloadBtn.disabled = true;
-        showToast('Failed to load audio for playback');
+        // Keep download enabled if we have audio data
+        downloadBtn.disabled = !currentAudioBlob;
+        showToast('Failed to load audio for playback. Try generating again.');
     });
 
     wavesurfer.on('audioprocess', updateTimeDisplay);
@@ -1626,14 +1627,19 @@ function updateTimeDisplay() {
 
 function playGeneratedAudio(blob) {
     currentAudioBlob = blob;
-    const url = URL.createObjectURL(blob);
+
+    // Revoke previous blob URL to prevent memory leak
+    if (currentBlobUrl) {
+        URL.revokeObjectURL(currentBlobUrl);
+    }
+    currentBlobUrl = URL.createObjectURL(blob);
 
     // Keep buttons disabled until WaveSurfer signals ready
     playBtn.disabled = true;
     downloadBtn.disabled = true;
 
     if (wavesurfer) {
-        wavesurfer.load(url);
+        wavesurfer.load(currentBlobUrl);
         wavesurfer.once('ready', () => {
             playBtn.disabled = false;
             downloadBtn.disabled = false;

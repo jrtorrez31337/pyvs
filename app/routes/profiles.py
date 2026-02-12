@@ -4,7 +4,7 @@ import json
 import uuid
 import shutil
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, current_app, send_file
 from app.config import is_valid_audio_id as is_valid_uuid
 
@@ -67,12 +67,16 @@ def get_profile(profile_id):
 def create_profile():
     """Create a new voice profile from current samples."""
     data = request.get_json()
+    if data is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
 
     name = data.get('name', '').strip()
     samples = data.get('samples', [])  # [{id, transcript}, ...]
 
     if not name:
         return jsonify({'error': 'Profile name is required'}), 400
+    if not isinstance(samples, list) or len(samples) > 100:
+        return jsonify({'error': 'samples must be a list (max 100)'}), 400
     if not samples:
         return jsonify({'error': 'At least one sample is required'}), 400
 
@@ -113,7 +117,7 @@ def create_profile():
         'id': profile_id,
         'name': name,
         'samples': profile_samples,
-        'created_at': datetime.utcnow().isoformat(),
+        'created_at': datetime.now(timezone.utc).isoformat(),
     }
 
     filepath = os.path.join(profiles_dir, f"{profile_id}.json")
@@ -230,7 +234,7 @@ def export_profile(profile_id):
         zip_buffer.seek(0)
 
         # Sanitize filename
-        safe_name = "".join(c for c in profile_data['name'] if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_name = "".join(c for c in profile_data['name'] if c.isalnum() or c in (' ', '-', '_')).strip() or "profile"
 
         return send_file(
             zip_buffer,
@@ -303,7 +307,7 @@ def import_profile():
                 'id': new_id,
                 'name': profile_data['name'].strip()[:200] + ' (imported)',
                 'samples': new_samples,
-                'created_at': datetime.utcnow().isoformat(),
+                'created_at': datetime.now(timezone.utc).isoformat(),
             }
 
             filepath = os.path.join(profiles_dir, f"{new_id}.json")

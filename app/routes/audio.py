@@ -111,23 +111,39 @@ def trim_audio(audio_id):
     """Trim audio file to specified start/end times."""
     if not is_valid_audio_id(audio_id):
         return jsonify({'error': 'Invalid audio ID'}), 400
-    data = request.get_json()
-    start = data.get('start', 0)  # seconds
-    end = data.get('end')  # seconds
+
+    request_data = request.get_json()
+    if request_data is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
+
+    try:
+        start = float(request_data.get('start', 0))
+        end_val = request_data.get('end')
+        end = float(end_val) if end_val is not None else None
+    except (TypeError, ValueError):
+        return jsonify({'error': 'start and end must be numeric'}), 400
+
+    if start < 0:
+        return jsonify({'error': 'start must be non-negative'}), 400
 
     file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{audio_id}.wav")
     if not os.path.exists(file_path):
         return jsonify({'error': 'Audio not found'}), 404
 
     try:
-        data, sr = sf.read(file_path)
+        audio_data, sr = sf.read(file_path)
 
         start_sample = int(start * sr)
-        end_sample = int(end * sr) if end else len(data)
+        end_sample = int(end * sr) if end is not None else len(audio_data)
 
-        trimmed = data[start_sample:end_sample]
+        if start_sample >= len(audio_data):
+            return jsonify({'error': 'start exceeds audio duration'}), 400
+        if end_sample <= start_sample:
+            return jsonify({'error': 'end must be greater than start'}), 400
+        end_sample = min(end_sample, len(audio_data))
 
-        # Save trimmed version with new ID
+        trimmed = audio_data[start_sample:end_sample]
+
         new_id = str(uuid.uuid4())
         new_path = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{new_id}.wav")
         sf.write(new_path, trimmed, sr)

@@ -90,6 +90,8 @@ def _validate_instruct(instruct):
 def tts_clone():
     """Generate speech using voice cloning with one or more reference samples"""
     data = request.get_json()
+    if data is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
 
     text = data.get('text')
     language = data.get('language', 'English')
@@ -97,6 +99,10 @@ def tts_clone():
     # Support both single and multiple reference samples
     ref_audio_ids = data.get('ref_audio_ids') or []
     ref_texts = data.get('ref_texts') or []
+    if not isinstance(ref_audio_ids, list):
+        ref_audio_ids = []
+    if not isinstance(ref_texts, list):
+        ref_texts = []
 
     # Backwards compatibility: single sample
     if not ref_audio_ids and data.get('ref_audio_id'):
@@ -155,11 +161,17 @@ def tts_clone():
 def tts_clone_stream():
     """Stream speech generation using voice cloning."""
     data = request.get_json()
+    if data is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
 
     text = data.get('text')
     language = data.get('language', 'English')
     ref_audio_ids = data.get('ref_audio_ids') or []
     ref_texts = data.get('ref_texts') or []
+    if not isinstance(ref_audio_ids, list):
+        ref_audio_ids = []
+    if not isinstance(ref_texts, list):
+        ref_texts = []
 
     err = _validate_text(text)
     if err:
@@ -228,6 +240,8 @@ def tts_clone_stream():
 def tts_custom():
     """Generate speech using custom voice preset"""
     data = request.get_json()
+    if data is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
 
     text = data.get('text')
     language = data.get('language', 'English')
@@ -272,6 +286,8 @@ def tts_custom():
 def tts_custom_stream():
     """Stream speech generation using custom voice."""
     data = request.get_json()
+    if data is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
 
     text = data.get('text')
     language = data.get('language', 'English')
@@ -330,6 +346,8 @@ def tts_custom_stream():
 def tts_design():
     """Generate speech using voice design"""
     data = request.get_json()
+    if data is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
 
     text = data.get('text')
     language = data.get('language', 'English')
@@ -372,6 +390,8 @@ def tts_design():
 def tts_design_stream():
     """Stream speech generation using voice design."""
     data = request.get_json()
+    if data is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
 
     text = data.get('text')
     language = data.get('language', 'English')
