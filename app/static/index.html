@@ -10,7 +10,12 @@
 <body>
     <div class="app">
         <header class="header">
-            <h1>Qwen3-TTS Studio</h1>
+            <div class="header-left">
+                <button id="hamburger-btn" class="hamburger-btn" aria-label="Toggle menu">
+                    <span></span><span></span><span></span>
+                </button>
+                <h1>Qwen3-TTS Studio</h1>
+            </div>
             <div id="gpu-status" class="gpu-status">Loading...</div>
         </header>
 
@@ -59,12 +64,28 @@
                             <input type="checkbox" id="stt-denoise" checked>
                             <span>Noise Reduction</span>
                         </label>
+                        <label class="toggle-option">
+                            <input type="checkbox" id="stt-word-timestamps">
+                            <span>Word Timestamps</span>
+                        </label>
+                        <label class="toggle-option">
+                            <input type="checkbox" id="stt-diarize">
+                            <span>Speaker Diarization</span>
+                        </label>
                     </div>
 
                     <div class="transcription-result">
                         <label>Transcribed Text:</label>
                         <textarea id="stt-result" readonly placeholder="Transcription will appear here..."></textarea>
-                        <button id="use-text-btn" class="secondary-btn" disabled>Use in TTS →</button>
+                        <div id="stt-word-results" class="word-results hidden"></div>
+                        <div id="stt-speaker-results" class="speaker-results hidden"></div>
+                        <div class="stt-actions">
+                            <button id="use-text-btn" class="secondary-btn" disabled>Use in TTS</button>
+                            <button id="stt-live-btn" class="secondary-btn">Live Transcription</button>
+                        </div>
+                        <div id="stt-live-indicator" class="recording-indicator hidden">
+                            <span class="pulse"></span> Live transcription active...
+                        </div>
                     </div>
                 </div>
 
@@ -171,6 +192,62 @@
                         <input type="range" id="clone-temperature" min="0.05" max="2" step="0.05" value="0.8" class="slider">
                     </div>
 
+                    <details class="settings-panel" id="clone-advanced-settings">
+                        <summary>Advanced Settings</summary>
+                        <div class="settings-content">
+                            <div class="form-group">
+                                <label data-tooltip="Controls randomness. Lower = more deterministic, higher = more creative">Temperature: <span id="clone-adv-temperature-value">0.9</span></label>
+                                <input type="range" id="clone-adv-temperature" min="0.1" max="2" step="0.05" value="0.9" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Limits vocabulary to top K tokens. Lower = more focused">Top-K: <span id="clone-top-k-value">50</span></label>
+                                <input type="range" id="clone-top-k" min="1" max="200" step="1" value="50" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Nucleus sampling. Lower = less random, higher = more diverse">Top-P: <span id="clone-top-p-value">1.0</span></label>
+                                <input type="range" id="clone-top-p" min="0" max="1" step="0.05" value="1" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Penalizes repeated tokens. Higher = less repetition">Repetition Penalty: <span id="clone-rep-penalty-value">1.05</span></label>
+                                <input type="range" id="clone-rep-penalty" min="1" max="2" step="0.05" value="1.05" class="slider">
+                            </div>
+                        </div>
+                    </details>
+
+                    <details class="settings-panel" id="clone-output-settings">
+                        <summary>Output Settings</summary>
+                        <div class="settings-content">
+                            <div class="form-group">
+                                <label data-tooltip="Output audio sample rate">Sample Rate:</label>
+                                <select id="clone-sample-rate">
+                                    <option value="">Native (24kHz)</option>
+                                    <option value="8000">8 kHz</option>
+                                    <option value="16000">16 kHz</option>
+                                    <option value="22050">22.05 kHz</option>
+                                    <option value="44100">44.1 kHz</option>
+                                    <option value="48000">48 kHz</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Normalize output volume to a target loudness level">
+                                    <input type="checkbox" id="clone-vol-normalize"> Volume Normalization
+                                </label>
+                                <div class="sub-control" id="clone-vol-lufs-group">
+                                    <label>Target LUFS: <span id="clone-vol-lufs-value">-16</span></label>
+                                    <input type="range" id="clone-vol-lufs" min="-24" max="-6" step="1" value="-16" class="slider" disabled>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Speed up or slow down the audio playback rate">Speed: <span id="clone-speed-value">1.0</span>x</label>
+                                <input type="range" id="clone-speed" min="0.5" max="2" step="0.05" value="1" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Shift pitch up or down in semitones">Pitch Shift: <span id="clone-pitch-value">0</span> st</label>
+                                <input type="range" id="clone-pitch" min="-12" max="12" step="1" value="0" class="slider">
+                            </div>
+                        </div>
+                    </details>
+
                     <button id="clone-generate-btn" class="generate-btn" disabled>Generate Speech</button>
                 </div>
 
@@ -223,6 +300,62 @@
                         </label>
                     </div>
 
+                    <details class="settings-panel">
+                        <summary>Advanced Settings</summary>
+                        <div class="settings-content">
+                            <div class="form-group">
+                                <label data-tooltip="Controls randomness. Lower = more deterministic">Temperature: <span id="custom-adv-temperature-value">0.9</span></label>
+                                <input type="range" id="custom-adv-temperature" min="0.1" max="2" step="0.05" value="0.9" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Limits vocabulary to top K tokens">Top-K: <span id="custom-top-k-value">50</span></label>
+                                <input type="range" id="custom-top-k" min="1" max="200" step="1" value="50" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Nucleus sampling threshold">Top-P: <span id="custom-top-p-value">1.0</span></label>
+                                <input type="range" id="custom-top-p" min="0" max="1" step="0.05" value="1" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Penalizes repeated tokens">Repetition Penalty: <span id="custom-rep-penalty-value">1.05</span></label>
+                                <input type="range" id="custom-rep-penalty" min="1" max="2" step="0.05" value="1.05" class="slider">
+                            </div>
+                        </div>
+                    </details>
+
+                    <details class="settings-panel">
+                        <summary>Output Settings</summary>
+                        <div class="settings-content">
+                            <div class="form-group">
+                                <label data-tooltip="Output audio sample rate">Sample Rate:</label>
+                                <select id="custom-sample-rate">
+                                    <option value="">Native (24kHz)</option>
+                                    <option value="8000">8 kHz</option>
+                                    <option value="16000">16 kHz</option>
+                                    <option value="22050">22.05 kHz</option>
+                                    <option value="44100">44.1 kHz</option>
+                                    <option value="48000">48 kHz</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Normalize output volume">
+                                    <input type="checkbox" id="custom-vol-normalize"> Volume Normalization
+                                </label>
+                                <div class="sub-control" id="custom-vol-lufs-group">
+                                    <label>Target LUFS: <span id="custom-vol-lufs-value">-16</span></label>
+                                    <input type="range" id="custom-vol-lufs" min="-24" max="-6" step="1" value="-16" class="slider" disabled>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Speed up or slow down audio">Speed: <span id="custom-speed-value">1.0</span>x</label>
+                                <input type="range" id="custom-speed" min="0.5" max="2" step="0.05" value="1" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Shift pitch in semitones">Pitch Shift: <span id="custom-pitch-value">0</span> st</label>
+                                <input type="range" id="custom-pitch" min="-12" max="12" step="1" value="0" class="slider">
+                            </div>
+                        </div>
+                    </details>
+
                     <button id="custom-generate-btn" class="generate-btn">Generate Speech</button>
                 </div>
 
@@ -261,6 +394,62 @@
                             <span>Use Voice Clone samples (from Voice Clone tab)</span>
                         </label>
                     </div>
+
+                    <details class="settings-panel">
+                        <summary>Advanced Settings</summary>
+                        <div class="settings-content">
+                            <div class="form-group">
+                                <label data-tooltip="Controls randomness">Temperature: <span id="design-adv-temperature-value">0.9</span></label>
+                                <input type="range" id="design-adv-temperature" min="0.1" max="2" step="0.05" value="0.9" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Limits vocabulary to top K tokens">Top-K: <span id="design-top-k-value">50</span></label>
+                                <input type="range" id="design-top-k" min="1" max="200" step="1" value="50" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Nucleus sampling threshold">Top-P: <span id="design-top-p-value">1.0</span></label>
+                                <input type="range" id="design-top-p" min="0" max="1" step="0.05" value="1" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Penalizes repeated tokens">Repetition Penalty: <span id="design-rep-penalty-value">1.05</span></label>
+                                <input type="range" id="design-rep-penalty" min="1" max="2" step="0.05" value="1.05" class="slider">
+                            </div>
+                        </div>
+                    </details>
+
+                    <details class="settings-panel">
+                        <summary>Output Settings</summary>
+                        <div class="settings-content">
+                            <div class="form-group">
+                                <label data-tooltip="Output audio sample rate">Sample Rate:</label>
+                                <select id="design-sample-rate">
+                                    <option value="">Native (24kHz)</option>
+                                    <option value="8000">8 kHz</option>
+                                    <option value="16000">16 kHz</option>
+                                    <option value="22050">22.05 kHz</option>
+                                    <option value="44100">44.1 kHz</option>
+                                    <option value="48000">48 kHz</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Normalize output volume">
+                                    <input type="checkbox" id="design-vol-normalize"> Volume Normalization
+                                </label>
+                                <div class="sub-control" id="design-vol-lufs-group">
+                                    <label>Target LUFS: <span id="design-vol-lufs-value">-16</span></label>
+                                    <input type="range" id="design-vol-lufs" min="-24" max="-6" step="1" value="-16" class="slider" disabled>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Speed up or slow down audio">Speed: <span id="design-speed-value">1.0</span>x</label>
+                                <input type="range" id="design-speed" min="0.5" max="2" step="0.05" value="1" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Shift pitch in semitones">Pitch Shift: <span id="design-pitch-value">0</span> st</label>
+                                <input type="range" id="design-pitch" min="-12" max="12" step="1" value="0" class="slider">
+                            </div>
+                        </div>
+                    </details>
 
                     <button id="design-generate-btn" class="generate-btn">Generate Speech</button>
                 </div>
@@ -306,12 +495,67 @@
                     </div>
 
                     <div class="form-group">
+                        <label data-tooltip="Penalizes repeated tokens to reduce stuttering">Repetition Penalty: <span id="chatterbox-rep-penalty-value">2.0</span></label>
+                        <input type="range" id="chatterbox-rep-penalty" min="1" max="3" step="0.05" value="2" class="slider">
+                    </div>
+
+                    <div class="form-group">
+                        <label data-tooltip="Minimum probability threshold for token selection">Min-P: <span id="chatterbox-min-p-value">0.05</span></label>
+                        <input type="range" id="chatterbox-min-p" min="0" max="1" step="0.01" value="0.05" class="slider">
+                    </div>
+
+                    <div class="form-group">
+                        <label data-tooltip="Nucleus sampling threshold">Top-P: <span id="chatterbox-top-p-value">1.0</span></label>
+                        <input type="range" id="chatterbox-top-p" min="0" max="1" step="0.05" value="1" class="slider">
+                    </div>
+
+                    <div class="form-group">
                         <label>Text to Speak:</label>
                         <textarea id="chatterbox-text" placeholder="Enter the text you want to generate..."></textarea>
                         <div class="text-counter">
                             <span class="char-count">0</span> characters | <span class="word-count">0</span> words
                         </div>
+                        <div class="batch-toggle">
+                            <label>
+                                <input type="checkbox" class="batch-mode-checkbox" data-mode="chatterbox">
+                                Batch Mode (one text per line)
+                            </label>
+                        </div>
                     </div>
+
+                    <details class="settings-panel">
+                        <summary>Output Settings</summary>
+                        <div class="settings-content">
+                            <div class="form-group">
+                                <label data-tooltip="Output audio sample rate">Sample Rate:</label>
+                                <select id="chatterbox-sample-rate">
+                                    <option value="">Native (24kHz)</option>
+                                    <option value="8000">8 kHz</option>
+                                    <option value="16000">16 kHz</option>
+                                    <option value="22050">22.05 kHz</option>
+                                    <option value="44100">44.1 kHz</option>
+                                    <option value="48000">48 kHz</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Normalize output volume">
+                                    <input type="checkbox" id="chatterbox-vol-normalize"> Volume Normalization
+                                </label>
+                                <div class="sub-control" id="chatterbox-vol-lufs-group">
+                                    <label>Target LUFS: <span id="chatterbox-vol-lufs-value">-16</span></label>
+                                    <input type="range" id="chatterbox-vol-lufs" min="-24" max="-6" step="1" value="-16" class="slider" disabled>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Speed up or slow down audio">Speed: <span id="chatterbox-speed-value">1.0</span>x</label>
+                                <input type="range" id="chatterbox-speed" min="0.5" max="2" step="0.05" value="1" class="slider">
+                            </div>
+                            <div class="form-group">
+                                <label data-tooltip="Shift pitch in semitones">Pitch Shift: <span id="chatterbox-pitch-value">0</span> st</label>
+                                <input type="range" id="chatterbox-pitch" min="-12" max="12" step="1" value="0" class="slider">
+                            </div>
+                        </div>
+                    </details>
 
                     <button id="chatterbox-generate-btn" class="generate-btn">Generate Speech</button>
                 </div>
@@ -355,6 +599,7 @@
                     <span id="time-display">0:00 / 0:00</span>
                 </div>
                 <button id="download-btn" class="download-btn" disabled>⬇ Download</button>
+                <span id="similarity-badge" class="similarity-badge" hidden></span>
             </div>
             <audio id="output-audio" hidden></audio>
         </footer>

@@ -4,6 +4,7 @@ import numpy as np
 from qwen_tts import Qwen3TTSModel, Qwen3TTSTokenizer
 from app.config import TTS_MODEL_BASE_PATH as MODEL_BASE_PATH
 from app.services.gpu_lock import gpu0_lock
+from app.services.audio_utils import apply_post_processing
 
 class TTSService:
     _instance = None
@@ -115,8 +116,15 @@ class TTSService:
             ref_texts.append(None)
         return list(ref_audio_paths), ref_texts
 
-    def _build_voice_clone_conditioning(self, ref_audio_paths, ref_texts=None, batch_size: int = 1):
+    def _build_voice_clone_conditioning(self, ref_audio_paths, ref_texts=None,
+                                         batch_size: int = 1, weights=None):
         """Build `voice_clone_prompt` (+ optional `ref_ids`) for non-base models.
+
+        Args:
+            ref_audio_paths: list of reference audio paths
+            ref_texts: list of reference transcripts
+            batch_size: batch size for duplication
+            weights: optional list of floats for weighted speaker embedding blending
 
         Note: this must run while holding `gpu0_lock` because it invokes the base model.
         """
@@ -148,11 +156,15 @@ class TTSService:
             return None, None
 
         if len(prompt_items) > 1:
-            # Multiple refs: average speaker embeddings and use x-vector-only mode.
-            avg_embed = torch.stack(
-                [torch.as_tensor(item.ref_spk_embedding) for item in prompt_items],
-                dim=0,
-            ).mean(dim=0)
+            # Multiple refs: weighted average of speaker embeddings.
+            embeddings = [torch.as_tensor(item.ref_spk_embedding) for item in prompt_items]
+            if weights and len(weights) == len(embeddings):
+                # Normalize weights
+                w = torch.tensor(weights, dtype=torch.float32)
+                w = w / w.sum()
+                avg_embed = sum(w_i * emb for w_i, emb in zip(w, embeddings))
+            else:
+                avg_embed = torch.stack(embeddings, dim=0).mean(dim=0)
             voice_clone_prompt = {
                 "ref_code": [None],
                 "ref_spk_embedding": [avg_embed],
@@ -185,7 +197,24 @@ class TTSService:
 
         return voice_clone_prompt, ref_ids
 
-    def generate_clone(self, text: str, language: str, ref_audio_paths, ref_texts=None, fast=False):
+    def _extract_model_kwargs(self, inference_params):
+        """Extract model-level kwargs from inference_params dict."""
+        kwargs = {}
+        if not inference_params:
+            return kwargs
+        for key in ('temperature', 'top_k', 'top_p', 'repetition_penalty'):
+            if key in inference_params and inference_params[key] is not None:
+                kwargs[key] = inference_params[key]
+        return kwargs
+
+    def _apply_post(self, wav, sr, post_processing):
+        """Apply post-processing pipeline if options provided."""
+        if post_processing:
+            wav, sr = apply_post_processing(wav, sr, post_processing)
+        return wav, sr
+
+    def generate_clone(self, text: str, language: str, ref_audio_paths, ref_texts=None,
+                       fast=False, inference_params=None, post_processing=None):
         """Generate speech using voice cloning with one or more reference samples.
 
         Args:
@@ -194,6 +223,8 @@ class TTSService:
             ref_audio_paths: Single path or list of paths to reference audio files
             ref_texts: Single text or list of transcripts (optional, improves quality)
             fast: Use 0.6B model for faster generation
+            inference_params: dict with temperature, top_k, top_p, repetition_penalty
+            post_processing: dict with pitch_shift, speed, volume_normalize, sample_rate
         """
         self.load_models()
         with gpu0_lock:
@@ -206,13 +237,15 @@ class TTSService:
             elif isinstance(ref_texts, str):
                 ref_texts = [ref_texts]
 
+            model_kwargs = self._extract_model_kwargs(inference_params)
             wavs, sr = model.generate_voice_clone(
                 text=text,
                 language=language,
                 ref_audio=ref_audio_paths,
                 ref_text=ref_texts,
+                **model_kwargs,
             )
-            return wavs[0], sr
+            return self._apply_post(wavs[0], sr, post_processing)
 
     def generate_custom(
         self,
@@ -223,6 +256,9 @@ class TTSService:
         fast=False,
         ref_audio_paths=None,
         ref_texts=None,
+        ref_weights=None,
+        inference_params=None,
+        post_processing=None,
     ):
         """Generate speech using custom voice preset"""
         self.load_models()
@@ -237,17 +273,20 @@ class TTSService:
                 kwargs["instruct"] = instruct
             if ref_audio_paths:
                 voice_clone_prompt, ref_ids = self._build_voice_clone_conditioning(
-                    ref_audio_paths, ref_texts, batch_size=1
+                    ref_audio_paths, ref_texts, batch_size=1, weights=ref_weights
                 )
                 if voice_clone_prompt is not None:
                     kwargs["voice_clone_prompt"] = voice_clone_prompt
                 if ref_ids is not None:
                     kwargs["ref_ids"] = ref_ids
 
+            kwargs.update(self._extract_model_kwargs(inference_params))
             wavs, sr = model.generate_custom_voice(**kwargs)
-            return wavs[0], sr
+            return self._apply_post(wavs[0], sr, post_processing)
 
-    def generate_design(self, text: str, language: str, instruct: str, ref_audio_paths=None, ref_texts=None):
+    def generate_design(self, text: str, language: str, instruct: str,
+                        ref_audio_paths=None, ref_texts=None, ref_weights=None,
+                        inference_params=None, post_processing=None):
         """Generate speech using voice design"""
         self.load_models()
         with gpu0_lock:
@@ -258,17 +297,19 @@ class TTSService:
             }
             if ref_audio_paths:
                 voice_clone_prompt, ref_ids = self._build_voice_clone_conditioning(
-                    ref_audio_paths, ref_texts, batch_size=1
+                    ref_audio_paths, ref_texts, batch_size=1, weights=ref_weights
                 )
                 if voice_clone_prompt is not None:
                     kwargs["voice_clone_prompt"] = voice_clone_prompt
                 if ref_ids is not None:
                     kwargs["ref_ids"] = ref_ids
 
+            kwargs.update(self._extract_model_kwargs(inference_params))
             wavs, sr = self.design_model.generate_voice_design(**kwargs)
-            return wavs[0], sr
+            return self._apply_post(wavs[0], sr, post_processing)
 
-    def generate_clone_streaming(self, text: str, language: str, ref_audio_paths, ref_texts=None, fast=False):
+    def generate_clone_streaming(self, text: str, language: str, ref_audio_paths, ref_texts=None,
+                                  fast=False, inference_params=None, post_processing=None):
         """Generate speech using voice cloning with streaming output.
 
         Yields audio chunks as they are generated.
@@ -282,6 +323,7 @@ class TTSService:
         elif isinstance(ref_texts, str):
             ref_texts = [ref_texts]
 
+        model_kwargs = self._extract_model_kwargs(inference_params)
         with gpu0_lock:
             wavs, sr = model.generate_voice_clone(
                 text=text,
@@ -289,9 +331,11 @@ class TTSService:
                 ref_audio=ref_audio_paths,
                 ref_text=ref_texts,
                 non_streaming_mode=False,
+                **model_kwargs,
             )
 
         wav = wavs[0] if isinstance(wavs, list) else wavs
+        wav, sr = self._apply_post(wav, sr, post_processing)
         yield from self._chunk_audio(wav, sr)
 
     def generate_custom_streaming(
@@ -303,6 +347,9 @@ class TTSService:
         fast=False,
         ref_audio_paths=None,
         ref_texts=None,
+        ref_weights=None,
+        inference_params=None,
+        post_processing=None,
     ):
         """Generate speech using custom voice with streaming output."""
         self.load_models()
@@ -316,10 +363,12 @@ class TTSService:
         if instruct:
             kwargs["instruct"] = instruct
 
+        kwargs.update(self._extract_model_kwargs(inference_params))
+
         with gpu0_lock:
             if ref_audio_paths:
                 voice_clone_prompt, ref_ids = self._build_voice_clone_conditioning(
-                    ref_audio_paths, ref_texts, batch_size=1
+                    ref_audio_paths, ref_texts, batch_size=1, weights=ref_weights
                 )
                 if voice_clone_prompt is not None:
                     kwargs["voice_clone_prompt"] = voice_clone_prompt
@@ -328,9 +377,13 @@ class TTSService:
             wavs, sr = model.generate_custom_voice(**kwargs)
 
         wav = wavs[0] if isinstance(wavs, list) else wavs
+        wav, sr = self._apply_post(wav, sr, post_processing)
         yield from self._chunk_audio(wav, sr)
 
-    def generate_design_streaming(self, text: str, language: str, instruct: str, ref_audio_paths=None, ref_texts=None):
+    def generate_design_streaming(self, text: str, language: str, instruct: str,
+                                   ref_audio_paths=None, ref_texts=None,
+                                   ref_weights=None,
+                                   inference_params=None, post_processing=None):
         """Generate speech using voice design with streaming output."""
         self.load_models()
         kwargs = {
@@ -339,10 +392,12 @@ class TTSService:
             "instruct": instruct,
             "non_streaming_mode": False,
         }
+        kwargs.update(self._extract_model_kwargs(inference_params))
+
         with gpu0_lock:
             if ref_audio_paths:
                 voice_clone_prompt, ref_ids = self._build_voice_clone_conditioning(
-                    ref_audio_paths, ref_texts, batch_size=1
+                    ref_audio_paths, ref_texts, batch_size=1, weights=ref_weights
                 )
                 if voice_clone_prompt is not None:
                     kwargs["voice_clone_prompt"] = voice_clone_prompt
@@ -351,6 +406,7 @@ class TTSService:
             wavs, sr = self.design_model.generate_voice_design(**kwargs)
 
         wav = wavs[0] if isinstance(wavs, list) else wavs
+        wav, sr = self._apply_post(wav, sr, post_processing)
         yield from self._chunk_audio(wav, sr)
 
     def get_supported_speakers(self):

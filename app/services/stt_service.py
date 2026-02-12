@@ -70,6 +70,54 @@ class STTService:
                 "duration": info.duration,
             }
 
+    def transcribe_with_options(self, audio_path: str, language: str = None,
+                                word_timestamps: bool = False) -> dict:
+        """Transcribe with optional word-level timestamps.
+
+        Args:
+            audio_path: path to audio file
+            language: language code or None for auto-detect
+            word_timestamps: if True, include word-level timing data
+        """
+        self.load_model()
+        with self._model_lock:
+            kwargs = {
+                'beam_size': 5,
+                'vad_filter': True,
+                'word_timestamps': word_timestamps,
+            }
+            if language:
+                kwargs['language'] = language
+
+            segments, info = self.model.transcribe(audio_path, **kwargs)
+
+            all_text_parts = []
+            words = []
+
+            for segment in segments:
+                all_text_parts.append(segment.text.strip())
+
+                if word_timestamps and segment.words:
+                    for w in segment.words:
+                        words.append({
+                            'word': w.word.strip(),
+                            'start': round(w.start, 3),
+                            'end': round(w.end, 3),
+                            'probability': round(w.probability, 3),
+                        })
+
+            result = {
+                "text": " ".join(all_text_parts),
+                "language": info.language,
+                "language_probability": info.language_probability,
+                "duration": info.duration,
+            }
+
+            if word_timestamps:
+                result["words"] = words
+
+            return result
+
     def transcribe_with_language_detect(self, audio_path: str) -> dict:
         """Transcribe with auto language detection. Alias for transcribe(path, None)."""
         return self.transcribe(audio_path, language=None)

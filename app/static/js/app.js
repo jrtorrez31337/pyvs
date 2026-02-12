@@ -148,6 +148,7 @@ async function _doGenerateStreaming(endpoint, body, onComplete) {
     // Clear stale audio state from previous generation
     currentJobId = null;
     currentAudioBlob = null;
+    hideSimilarityBadge();
 
     showLoading();
 
@@ -336,6 +337,48 @@ function readAscii(view, offset, length) {
     return result;
 }
 
+// Voice similarity scoring
+async function fetchSimilarityScore(refAudioId, generatedJobId) {
+    const badge = document.getElementById('similarity-badge');
+    if (!badge) return;
+    badge.hidden = true;
+    badge.className = 'similarity-badge';
+
+    try {
+        const resp = await fetch('/api/tts/similarity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ref_audio_id: refAudioId,
+                generated_audio_id: generatedJobId,
+            }),
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const score = data.score;
+        if (score == null) return;
+
+        let tier;
+        if (score >= 75) tier = 'sim-high';
+        else if (score >= 50) tier = 'sim-medium';
+        else tier = 'sim-low';
+
+        badge.textContent = `Voice Match: ${score}%`;
+        badge.className = `similarity-badge ${tier}`;
+        badge.hidden = false;
+    } catch (e) {
+        // Silently fail — similarity is informational
+    }
+}
+
+function hideSimilarityBadge() {
+    const badge = document.getElementById('similarity-badge');
+    if (badge) {
+        badge.hidden = true;
+        badge.className = 'similarity-badge';
+    }
+}
+
 // Elements
 const navBtns = document.querySelectorAll('.nav-btn');
 const modePanels = document.querySelectorAll('.mode-panel');
@@ -362,9 +405,138 @@ document.addEventListener('DOMContentLoaded', () => {
     initBatchMode();
     initTextCounters();
     initTrimModal();
+    initSettingsSliders();
+    initMobileMenu();
     loadLanguages();
     loadSpeakers();
 });
+
+// Wire all settings panel sliders with live value display
+function initSettingsSliders() {
+    const sliderConfigs = [
+        // Clone Advanced
+        ['clone-adv-temperature', 'clone-adv-temperature-value'],
+        ['clone-top-k', 'clone-top-k-value'],
+        ['clone-top-p', 'clone-top-p-value'],
+        ['clone-rep-penalty', 'clone-rep-penalty-value'],
+        // Clone Output
+        ['clone-speed', 'clone-speed-value'],
+        ['clone-pitch', 'clone-pitch-value'],
+        ['clone-vol-lufs', 'clone-vol-lufs-value'],
+        // Custom Advanced
+        ['custom-adv-temperature', 'custom-adv-temperature-value'],
+        ['custom-top-k', 'custom-top-k-value'],
+        ['custom-top-p', 'custom-top-p-value'],
+        ['custom-rep-penalty', 'custom-rep-penalty-value'],
+        // Custom Output
+        ['custom-speed', 'custom-speed-value'],
+        ['custom-pitch', 'custom-pitch-value'],
+        ['custom-vol-lufs', 'custom-vol-lufs-value'],
+        // Design Advanced
+        ['design-adv-temperature', 'design-adv-temperature-value'],
+        ['design-top-k', 'design-top-k-value'],
+        ['design-top-p', 'design-top-p-value'],
+        ['design-rep-penalty', 'design-rep-penalty-value'],
+        // Design Output
+        ['design-speed', 'design-speed-value'],
+        ['design-pitch', 'design-pitch-value'],
+        ['design-vol-lufs', 'design-vol-lufs-value'],
+        // Chatterbox extra sliders
+        ['chatterbox-rep-penalty', 'chatterbox-rep-penalty-value'],
+        ['chatterbox-min-p', 'chatterbox-min-p-value'],
+        ['chatterbox-top-p', 'chatterbox-top-p-value'],
+        // Chatterbox Output
+        ['chatterbox-speed', 'chatterbox-speed-value'],
+        ['chatterbox-pitch', 'chatterbox-pitch-value'],
+        ['chatterbox-vol-lufs', 'chatterbox-vol-lufs-value'],
+    ];
+
+    sliderConfigs.forEach(([sliderId, valueId]) => {
+        const slider = document.getElementById(sliderId);
+        const display = document.getElementById(valueId);
+        if (slider && display) {
+            slider.addEventListener('input', () => { display.textContent = slider.value; });
+        }
+    });
+
+    // Volume normalize toggles
+    ['clone', 'custom', 'design', 'chatterbox'].forEach(mode => {
+        const toggle = document.getElementById(`${mode}-vol-normalize`);
+        const lufsSlider = document.getElementById(`${mode}-vol-lufs`);
+        if (toggle && lufsSlider) {
+            toggle.addEventListener('change', () => {
+                lufsSlider.disabled = !toggle.checked;
+            });
+        }
+    });
+}
+
+// Collect inference params for Qwen modes
+function collectInferenceParams(mode) {
+    const params = {};
+    const tempEl = document.getElementById(`${mode}-adv-temperature`);
+    const topKEl = document.getElementById(`${mode}-top-k`);
+    const topPEl = document.getElementById(`${mode}-top-p`);
+    const repEl = document.getElementById(`${mode}-rep-penalty`);
+
+    if (tempEl) params.temperature = parseFloat(tempEl.value);
+    if (topKEl) params.top_k = parseInt(topKEl.value);
+    if (topPEl) params.top_p = parseFloat(topPEl.value);
+    if (repEl) params.repetition_penalty = parseFloat(repEl.value);
+
+    return params;
+}
+
+// Collect post-processing params
+function collectPostProcessing(mode) {
+    const params = {};
+    const srEl = document.getElementById(`${mode}-sample-rate`);
+    const volEl = document.getElementById(`${mode}-vol-normalize`);
+    const lufsEl = document.getElementById(`${mode}-vol-lufs`);
+    const speedEl = document.getElementById(`${mode}-speed`);
+    const pitchEl = document.getElementById(`${mode}-pitch`);
+
+    if (srEl && srEl.value) params.sample_rate = parseInt(srEl.value);
+    if (volEl && volEl.checked) params.volume_normalize = lufsEl ? parseInt(lufsEl.value) : -16;
+    if (speedEl && Math.abs(parseFloat(speedEl.value) - 1.0) >= 0.01) params.speed = parseFloat(speedEl.value);
+    if (pitchEl && parseInt(pitchEl.value) !== 0) params.pitch_shift = parseInt(pitchEl.value);
+
+    return Object.keys(params).length > 0 ? params : null;
+}
+
+// Mobile hamburger menu
+function initMobileMenu() {
+    const hamburger = document.getElementById('hamburger-btn');
+    const sidebar = document.querySelector('.sidebar');
+    if (!hamburger || !sidebar) return;
+
+    hamburger.addEventListener('click', () => {
+        const isOpen = sidebar.classList.toggle('open');
+        if (isOpen) {
+            const overlay = document.createElement('div');
+            overlay.className = 'sidebar-overlay';
+            overlay.addEventListener('click', () => {
+                sidebar.classList.remove('open');
+                overlay.remove();
+            });
+            document.body.appendChild(overlay);
+        } else {
+            const overlay = document.querySelector('.sidebar-overlay');
+            if (overlay) overlay.remove();
+        }
+    });
+
+    // Auto-close sidebar when a mode is selected on mobile
+    sidebar.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (window.innerWidth <= 768) {
+                sidebar.classList.remove('open');
+                const overlay = document.querySelector('.sidebar-overlay');
+                if (overlay) overlay.remove();
+            }
+        });
+    });
+}
 
 // GPU Status Polling
 function initGPUStatus() {
@@ -816,6 +988,12 @@ function initSTT() {
         const denoise = document.getElementById('stt-denoise').checked;
         formData.append('denoise', denoise.toString());
 
+        // Add word timestamps and diarization preferences
+        const wordTimestamps = document.getElementById('stt-word-timestamps').checked;
+        const diarize = document.getElementById('stt-diarize').checked;
+        formData.append('word_timestamps', wordTimestamps.toString());
+        formData.append('diarize', diarize.toString());
+
         try {
             showLoading();
             const response = await fetchWithTimeout('/api/stt', {
@@ -831,11 +1009,135 @@ function initSTT() {
 
             sttResult.value = data.text;
             useTextBtn.disabled = !data.text;
+
+            // Display word-level results
+            const wordResults = document.getElementById('stt-word-results');
+            if (data.words && data.words.length > 0) {
+                wordResults.innerHTML = data.words.map(w => {
+                    const confClass = w.probability >= 0.8 ? 'high-conf'
+                        : w.probability >= 0.5 ? 'mid-conf' : 'low-conf';
+                    return `<span class="word ${confClass}" title="${w.start}s - ${w.end}s (${Math.round(w.probability * 100)}%)">${escapeHtml(w.word)} </span>`;
+                }).join('');
+                wordResults.classList.remove('hidden');
+            } else {
+                wordResults.classList.add('hidden');
+            }
+
+            // Display speaker-attributed results
+            const speakerResults = document.getElementById('stt-speaker-results');
+            if (data.speakers && data.speakers.length > 0) {
+                const speakerMap = {};
+                let speakerIndex = 0;
+                speakerResults.innerHTML = data.speakers.map(seg => {
+                    if (!(seg.speaker in speakerMap)) {
+                        speakerMap[seg.speaker] = speakerIndex++;
+                    }
+                    const idx = speakerMap[seg.speaker] % 4;
+                    return `<div class="speaker-segment speaker-${idx}">
+                        <div class="speaker-label">${escapeHtml(seg.speaker)} (${seg.start}s - ${seg.end}s)</div>
+                        <div>${escapeHtml(seg.text)}</div>
+                    </div>`;
+                }).join('');
+                speakerResults.classList.remove('hidden');
+            } else {
+                speakerResults.classList.add('hidden');
+            }
+
+            if (data.diarization_error) {
+                showToast('Diarization: ' + data.diarization_error, 'warning');
+            }
         } catch (err) {
             console.error('Transcription error:', err);
             showToast('Transcription failed: ' + err.message);
         } finally {
             hideLoading();
+        }
+    }
+
+    // Live transcription button
+    const liveBtn = document.getElementById('stt-live-btn');
+    const liveIndicator = document.getElementById('stt-live-indicator');
+    let isLiveTranscribing = false;
+    let liveMediaRecorder = null;
+    let liveInterval = null;
+
+    if (liveBtn) {
+        liveBtn.addEventListener('click', async () => {
+            if (!isLiveTranscribing) {
+                await startLiveTranscription();
+            } else {
+                stopLiveTranscription();
+            }
+        });
+    }
+
+    async function startLiveTranscription() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true }
+            });
+
+            isLiveTranscribing = true;
+            liveBtn.textContent = 'Stop Live';
+            liveBtn.classList.add('recording');
+            liveIndicator.classList.remove('hidden');
+
+            // Record in 5-second chunks and transcribe each
+            function recordChunk() {
+                if (!isLiveTranscribing) return;
+
+                liveMediaRecorder = new MediaRecorder(stream);
+                const chunks = [];
+
+                liveMediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+
+                liveMediaRecorder.onstop = async () => {
+                    if (!isLiveTranscribing) {
+                        stream.getTracks().forEach(t => t.stop());
+                        return;
+                    }
+                    const blob = new Blob(chunks, { type: 'audio/webm' });
+                    // Transcribe in background
+                    const formData = new FormData();
+                    formData.append('audio', blob, 'live.webm');
+                    formData.append('denoise', 'false');
+                    try {
+                        const response = await fetch('/api/stt', {
+                            method: 'POST', body: formData
+                        });
+                        const data = await response.json();
+                        if (data.text) {
+                            sttResult.value += (sttResult.value ? ' ' : '') + data.text;
+                            useTextBtn.disabled = false;
+                        }
+                    } catch (e) {
+                        console.error('Live transcription chunk error:', e);
+                    }
+                    recordChunk(); // Start next chunk
+                };
+
+                liveMediaRecorder.start();
+                setTimeout(() => {
+                    if (liveMediaRecorder && liveMediaRecorder.state === 'recording') {
+                        liveMediaRecorder.stop();
+                    }
+                }, 5000);
+            }
+
+            recordChunk();
+        } catch (err) {
+            showToast('Could not start live transcription: ' + err.message);
+            isLiveTranscribing = false;
+        }
+    }
+
+    function stopLiveTranscription() {
+        isLiveTranscribing = false;
+        liveBtn.textContent = 'Live Transcription';
+        liveBtn.classList.remove('recording');
+        liveIndicator.classList.add('hidden');
+        if (liveMediaRecorder && liveMediaRecorder.state === 'recording') {
+            liveMediaRecorder.stop();
         }
     }
 }
@@ -870,11 +1172,12 @@ function initVoiceClone() {
     const profileSaveBtn = document.getElementById('profile-save-btn');
     const profileDeleteBtn = document.getElementById('profile-delete-btn');
 
-    // Multiple samples storage: [{id, blobUrl, transcript}, ...]
+    // Multiple samples storage: [{id, blobUrl, transcript, weight}, ...]
     let samples = [];
     window._getCloneSamplesImpl = () => samples.map(sample => ({
         id: sample.id,
         transcript: sample.transcript || null,
+        weight: sample.weight || 1.0,
     }));
 
     // Initialize profiles
@@ -1067,7 +1370,7 @@ function initVoiceClone() {
             showToast(`Maximum ${MAX_SAMPLES} samples allowed. Remove one to add more.`, 'warning');
             return;
         }
-        samples.push({ id, blobUrl, transcript });
+        samples.push({ id, blobUrl, transcript, weight: 1.0 });
         renderSamples();
         updateGenerateButton();
         updateProfileButtons();
@@ -1120,6 +1423,10 @@ function initVoiceClone() {
                 </div>
                 <input type="text" class="sample-transcript" placeholder="Transcript of this sample..."
                        value="${escapeHtml(sample.transcript)}" data-index="${index}">
+                <div class="sample-weight">
+                    <label>Weight: <span class="weight-value">${(sample.weight || 1.0).toFixed(1)}</span></label>
+                    <input type="range" class="slider sample-weight-slider" min="0" max="1" step="0.1" value="${sample.weight || 1.0}" data-index="${index}">
+                </div>
             </div>
         `).join('');
 
@@ -1141,6 +1448,16 @@ function initVoiceClone() {
         samplesList.querySelectorAll('.sample-transcript').forEach(input => {
             input.addEventListener('input', (e) => {
                 updateSampleTranscript(parseInt(e.target.dataset.index), e.target.value);
+            });
+        });
+
+        samplesList.querySelectorAll('.sample-weight-slider').forEach(slider => {
+            slider.addEventListener('input', (e) => {
+                const idx = parseInt(e.target.dataset.index);
+                if (samples[idx]) {
+                    samples[idx].weight = parseFloat(e.target.value);
+                    e.target.parentElement.querySelector('.weight-value').textContent = parseFloat(e.target.value).toFixed(1);
+                }
             });
         });
     }
@@ -1215,6 +1532,7 @@ function initVoiceClone() {
 
         const refAudioIds = samples.map(s => s.id);
         const refTexts = samples.map(s => s.transcript || null);
+        const refWeights = samples.map(s => s.weight || 1.0);
         const fast = document.getElementById('clone-fast-mode').checked;
         const qwenLanguage = document.getElementById('clone-language').value;
         const chatterboxLanguage = document.getElementById('clone-chatterbox-language').value || 'en';
@@ -1227,6 +1545,9 @@ function initVoiceClone() {
             if (engine === 'chatterbox' && samples.length > 1) {
                 showToast('Chatterbox clone uses Sample 1 as the reference voice.', 'info', 3500);
             }
+
+            const inferenceParams = collectInferenceParams('clone');
+            const postProcessing = collectPostProcessing('clone');
 
             for (const text of texts) {
                 if (engine === 'chatterbox') {
@@ -1242,6 +1563,7 @@ function initVoiceClone() {
                                 exaggeration,
                                 cfg_weight: cfgWeight,
                                 temperature,
+                                ...postProcessing,
                             })
                         });
 
@@ -1269,6 +1591,7 @@ function initVoiceClone() {
                                 },
                                 currentJobId
                             );
+                            fetchSimilarityScore(refAudioIds[0], currentJobId);
                         }
                     } catch (err) {
                         showToast('Generation failed: ' + err.message);
@@ -1281,7 +1604,10 @@ function initVoiceClone() {
                         language: qwenLanguage,
                         ref_audio_ids: refAudioIds,
                         ref_texts: refTexts,
-                        fast
+                        ref_weights: refWeights,
+                        fast,
+                        ...inferenceParams,
+                        ...postProcessing,
                     }, (jobId) => {
                         if (jobId) {
                             window.addToHistory(
@@ -1291,6 +1617,7 @@ function initVoiceClone() {
                                 { engine: 'qwen', samples: samples.length, fast },
                                 jobId
                             );
+                            fetchSimilarityScore(refAudioIds[0], jobId);
                         }
                     });
                 }
@@ -1547,6 +1874,9 @@ function initCustomVoice() {
         }
 
         isGenerating = true;
+        const inferenceParams = collectInferenceParams('custom');
+        const postProcessing = collectPostProcessing('custom');
+
         try {
             if (useClone) {
                 showToast('Applying clone reference conditioning with Custom Voice controls.', 'info', 3000);
@@ -1560,6 +1890,9 @@ function initCustomVoice() {
                     fast,
                     ref_audio_ids: useClone ? cloneSamples.map(s => s.id) : [],
                     ref_texts: useClone ? cloneSamples.map(s => s.transcript) : [],
+                    ref_weights: useClone ? cloneSamples.map(s => s.weight || 1.0) : [],
+                    ...inferenceParams,
+                    ...postProcessing,
                 }, (jobId) => {
                     if (jobId) {
                         window.addToHistory('custom', text, language, {
@@ -1621,6 +1954,9 @@ function initVoiceDesign() {
         }
 
         isGenerating = true;
+        const inferenceParams = collectInferenceParams('design');
+        const postProcessing = collectPostProcessing('design');
+
         try {
             if (useClone) {
                 showToast('Applying clone reference conditioning with Voice Design instruction.', 'info', 3000);
@@ -1632,6 +1968,9 @@ function initVoiceDesign() {
                     instruct,
                     ref_audio_ids: useClone ? cloneSamples.map(s => s.id) : [],
                     ref_texts: useClone ? cloneSamples.map(s => s.transcript) : [],
+                    ref_weights: useClone ? cloneSamples.map(s => s.weight || 1.0) : [],
+                    ...inferenceParams,
+                    ...postProcessing,
                 }, (jobId) => {
                     if (jobId) window.addToHistory('design', text, language, { instruct, via_clone: useClone }, jobId);
                 });
@@ -1746,8 +2085,8 @@ function initChatterbox() {
             showToast('Generation already in progress', 'warning');
             return;
         }
-        const text = textInput.value.trim();
-        if (!text) {
+        const texts = getTextsForMode('chatterbox');
+        if (texts.length === 0) {
             showToast('Please enter text to generate speech', 'warning');
             return;
         }
@@ -1755,6 +2094,9 @@ function initChatterbox() {
         const languageId = document.getElementById('chatterbox-language').value;
         const exaggeration = parseFloat(exaggerationSlider.value);
         const cfgWeight = parseFloat(cfgSlider.value);
+        const repPenalty = parseFloat(document.getElementById('chatterbox-rep-penalty').value);
+        const minP = parseFloat(document.getElementById('chatterbox-min-p').value);
+        const topP = parseFloat(document.getElementById('chatterbox-top-p').value);
         const useCloneRef = useCloneRefToggle.checked;
         const cloneSamples = useCloneRef ? getCloneSamples() : [];
         const effectiveRefAudioId = useCloneRef ? (cloneSamples[0]?.id || null) : refAudioId;
@@ -1763,39 +2105,69 @@ function initChatterbox() {
             return;
         }
 
+        const postProcessing = collectPostProcessing('chatterbox') || {};
+
         isGenerating = true;
-        currentJobId = null;
-        currentAudioBlob = null;
 
         try {
-            showLoading();
-            const response = await fetchWithTimeout('/api/tts/chatterbox/generate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    text, language_id: languageId, exaggeration,
-                    cfg_weight: cfgWeight, ref_audio_id: effectiveRefAudioId,
-                })
-            });
+            // Batch mode with multiple texts
+            if (isBatchMode('chatterbox') && texts.length > 1) {
+                showLoading();
+                try {
+                    const response = await fetchWithTimeout('/api/tts/chatterbox/batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            texts,
+                            language_id: languageId,
+                            exaggeration,
+                            cfg_weight: cfgWeight,
+                            temperature: parseFloat(exaggerationSlider.parentElement.parentElement.querySelector('#chatterbox-exaggeration')?.value || 0.5),
+                            repetition_penalty: repPenalty,
+                            min_p: minP,
+                            top_p: topP,
+                            ref_audio_id: effectiveRefAudioId,
+                            ...postProcessing,
+                        })
+                    });
+                    if (!response.ok) {
+                        const msg = await getErrorMessage(response, 'Batch generation failed');
+                        throw new Error(msg);
+                    }
+                    const blob = await response.blob();
+                    downloadBlob(blob);
+                    showToast(`Batch complete: ${texts.length} items generated and downloaded as ZIP`, 'success');
+                } finally {
+                    hideLoading();
+                }
+            } else {
+                // Single or sequential generation with streaming
+                for (const text of texts) {
+                    const body = {
+                        text,
+                        language_id: languageId,
+                        exaggeration,
+                        cfg_weight: cfgWeight,
+                        repetition_penalty: repPenalty,
+                        min_p: minP,
+                        top_p: topP,
+                        ref_audio_id: effectiveRefAudioId,
+                        ...postProcessing,
+                    };
 
-            if (!response.ok) {
-                const msg = await getErrorMessage(response, 'Generation failed');
-                throw new Error(msg);
-            }
-
-            currentJobId = response.headers.get('X-Job-Id');
-            const audioBlob = await response.blob();
-            playGeneratedAudio(audioBlob);
-
-            if (currentJobId) {
-                window.addToHistory('chatterbox', text, languageId,
-                    { exaggeration, cfg_weight: cfgWeight, via_clone_ref: useCloneRef }, currentJobId);
+                    await _doGenerateStreaming('/api/tts/chatterbox/stream', body, (jobId) => {
+                        if (jobId) {
+                            window.addToHistory('chatterbox', text, languageId,
+                                { exaggeration, cfg_weight: cfgWeight, via_clone_ref: useCloneRef }, jobId);
+                        }
+                    });
+                }
+                if (texts.length > 1) showToast(`Batch complete: ${texts.length} items generated`, 'success');
             }
         } catch (err) {
             showToast('Generation failed: ' + err.message);
         } finally {
             isGenerating = false;
-            hideLoading();
         }
     }
 }
