@@ -125,6 +125,8 @@ def trim_audio(audio_id):
 
     if start < 0:
         return jsonify({'error': 'start must be non-negative'}), 400
+    if end is not None and end < 0:
+        return jsonify({'error': 'end must be non-negative'}), 400
 
     file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{audio_id}.wav")
     if not os.path.exists(file_path):

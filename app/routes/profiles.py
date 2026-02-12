@@ -99,6 +99,8 @@ def create_profile():
 
         src_path = os.path.join(upload_folder, f"{sample_id}.wav")
         if os.path.exists(src_path):
+            # Touch mtime to prevent stale-upload cleanup from deleting mid-copy
+            os.utime(src_path, None)
             # Copy to profile directory with new ID
             new_sample_id = str(uuid.uuid4())
             dst_path = os.path.join(profile_audio_dir, f"{new_sample_id}.wav")
@@ -121,8 +123,13 @@ def create_profile():
     }
 
     filepath = os.path.join(profiles_dir, f"{profile_id}.json")
-    with open(filepath, 'w') as f:
-        json.dump(profile_data, f, indent=2)
+    try:
+        with open(filepath, 'w') as f:
+            json.dump(profile_data, f, indent=2)
+    except Exception:
+        # Clean up orphaned audio directory on metadata write failure
+        shutil.rmtree(profile_audio_dir, ignore_errors=True)
+        raise
 
     return jsonify({
         'id': profile_id,

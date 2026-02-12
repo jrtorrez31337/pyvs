@@ -3,6 +3,7 @@ import os
 import subprocess
 import tempfile
 import numpy as np
+import scipy.signal
 import soundfile as sf
 from app.services.clearvoice_service import clearvoice_service
 
@@ -62,7 +63,6 @@ def reduce_noise(audio_data, sample_rate):
         if len(enhanced.shape) > 1:
             enhanced = enhanced[0]  # Take first channel/batch
         if sample_rate != CLEARVOICE_OUTPUT_SR:
-            import scipy.signal
             num_samples = round(len(enhanced) * sample_rate / CLEARVOICE_OUTPUT_SR)
             enhanced = scipy.signal.resample(enhanced, num_samples)
 

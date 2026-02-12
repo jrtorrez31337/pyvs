@@ -19,6 +19,7 @@ let isRecording = false;
 let currentJobId = null;
 let currentAudioBlob = null;
 let currentBlobUrl = null;
+let isGenerating = false;
 
 // Toast notification system
 function showToast(message, type = 'error', duration = 5000) {
@@ -120,7 +121,17 @@ class StreamingAudioPlayer {
 const streamingPlayer = new StreamingAudioPlayer();
 
 async function generateWithStreaming(endpoint, body, onComplete) {
+    if (isGenerating) {
+        showToast('Generation already in progress', 'warning');
+        return;
+    }
+    isGenerating = true;
     streamingPlayer.reset();
+
+    // Clear stale audio state from previous generation
+    currentJobId = null;
+    currentAudioBlob = null;
+
     showLoading();
 
     const allPcmChunks = [];
@@ -228,6 +239,7 @@ async function generateWithStreaming(endpoint, body, onComplete) {
         console.error('Streaming error:', err);
         showToast('Generation failed: ' + err.message);
     } finally {
+        isGenerating = false;
         hideLoading();
     }
 }
@@ -327,8 +339,21 @@ function initGPUStatus() {
             gpuStatus.textContent = 'GPU: Unavailable';
             pollInterval = Math.min(pollInterval * 2, GPU_MAX_POLL_INTERVAL_MS);
         }
-        timerId = setTimeout(updateGPUStatus, pollInterval);
+        if (document.visibilityState === 'visible') {
+            timerId = setTimeout(updateGPUStatus, pollInterval);
+        } else {
+            timerId = null;
+        }
     }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && !timerId) {
+            updateGPUStatus();
+        } else if (document.visibilityState === 'hidden' && timerId) {
+            clearTimeout(timerId);
+            timerId = null;
+        }
+    });
 
     updateGPUStatus();
 }
@@ -951,6 +976,9 @@ function initVoiceClone() {
     }
 
     function removeSample(index) {
+        if (samples[index] && samples[index].blobUrl) {
+            URL.revokeObjectURL(samples[index].blobUrl);
+        }
         samples.splice(index, 1);
         renderSamples();
         updateGenerateButton();
@@ -970,6 +998,10 @@ function initVoiceClone() {
             const response = await fetch(`/api/audio/stream/${newAudioId}`);
             if (response.ok) {
                 const blob = await response.blob();
+                // Revoke old blob URL before replacing
+                if (samples[index].blobUrl) {
+                    URL.revokeObjectURL(samples[index].blobUrl);
+                }
                 samples[index].id = newAudioId;
                 samples[index].blobUrl = URL.createObjectURL(blob);
                 renderSamples();
@@ -1232,7 +1264,8 @@ function initVoiceClone() {
                 throw new Error(data.error);
             }
 
-            // Clear current samples and load from profile
+            // Revoke old blob URLs before clearing samples
+            samples.forEach(s => { if (s.blobUrl) URL.revokeObjectURL(s.blobUrl); });
             samples = [];
             for (const sample of data.samples) {
                 // Fetch the audio to create blob URL
@@ -1469,6 +1502,10 @@ function initChatterbox() {
     generateBtn.addEventListener('click', generateChatterbox);
 
     async function generateChatterbox() {
+        if (isGenerating) {
+            showToast('Generation already in progress', 'warning');
+            return;
+        }
         const text = textInput.value.trim();
         if (!text) {
             showToast('Please enter text to generate speech', 'warning');
@@ -1478,6 +1515,10 @@ function initChatterbox() {
         const languageId = document.getElementById('chatterbox-language').value;
         const exaggeration = parseFloat(exaggerationSlider.value);
         const cfgWeight = parseFloat(cfgSlider.value);
+
+        isGenerating = true;
+        currentJobId = null;
+        currentAudioBlob = null;
 
         try {
             showLoading();
@@ -1506,6 +1547,7 @@ function initChatterbox() {
         } catch (err) {
             showToast('Generation failed: ' + err.message);
         } finally {
+            isGenerating = false;
             hideLoading();
         }
     }

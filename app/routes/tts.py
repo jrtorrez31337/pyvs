@@ -210,7 +210,7 @@ def tts_clone_stream():
                     header_sent = True
 
                 # Convert float32 to int16
-                audio_int16 = (chunk * 32767).astype(np.int16)
+                audio_int16 = np.clip(chunk * 32767, -32768, 32767).astype(np.int16)
                 all_chunks.append(chunk)
                 yield audio_int16.tobytes()
 
@@ -318,7 +318,7 @@ def tts_custom_stream():
                     yield create_wav_header(sr)
                     header_sent = True
 
-                audio_int16 = (chunk * 32767).astype(np.int16)
+                audio_int16 = np.clip(chunk * 32767, -32768, 32767).astype(np.int16)
                 all_chunks.append(chunk)
                 yield audio_int16.tobytes()
 
@@ -420,7 +420,7 @@ def tts_design_stream():
                     yield create_wav_header(sr)
                     header_sent = True
 
-                audio_int16 = (chunk * 32767).astype(np.int16)
+                audio_int16 = np.clip(chunk * 32767, -32768, 32767).astype(np.int16)
                 all_chunks.append(chunk)
                 yield audio_int16.tobytes()
 
