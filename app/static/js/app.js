@@ -339,19 +339,20 @@ function initGPUStatus() {
             gpuStatus.textContent = 'GPU: Unavailable';
             pollInterval = Math.min(pollInterval * 2, GPU_MAX_POLL_INTERVAL_MS);
         }
+        timerId = null;
         if (document.visibilityState === 'visible') {
             timerId = setTimeout(updateGPUStatus, pollInterval);
-        } else {
-            timerId = null;
         }
     }
 
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && !timerId) {
-            updateGPUStatus();
-        } else if (document.visibilityState === 'hidden' && timerId) {
-            clearTimeout(timerId);
-            timerId = null;
+        if (document.visibilityState === 'visible') {
+            if (!timerId) updateGPUStatus();
+        } else {
+            if (timerId) {
+                clearTimeout(timerId);
+                timerId = null;
+            }
         }
     });
 
@@ -574,6 +575,10 @@ function initTrimModal() {
     });
 
     saveBtn.addEventListener('click', async () => {
+        if (trimPreviewInterval) {
+            clearInterval(trimPreviewInterval);
+            trimPreviewInterval = null;
+        }
         const start = parseFloat(trimStart.value) || 0;
         const end = parseFloat(trimEnd.value);
 
@@ -1264,28 +1269,28 @@ function initVoiceClone() {
                 throw new Error(data.error);
             }
 
-            // Revoke old blob URLs before clearing samples
-            samples.forEach(s => { if (s.blobUrl) URL.revokeObjectURL(s.blobUrl); });
-            samples = [];
+            // Fetch all new sample blobs first, then swap
+            const newSamples = [];
             for (const sample of data.samples) {
-                // Fetch the audio to create blob URL
                 const audioResponse = await fetch(`/api/audio/stream/${sample.id}`);
                 if (audioResponse.ok) {
                     const blob = await audioResponse.blob();
-                    samples.push({
+                    newSamples.push({
                         id: sample.id,
                         blobUrl: URL.createObjectURL(blob),
                         transcript: sample.transcript || ''
                     });
                 } else {
-                    // Fallback - add without blob URL (won't have preview)
-                    samples.push({
+                    newSamples.push({
                         id: sample.id,
                         blobUrl: '',
                         transcript: sample.transcript || ''
                     });
                 }
             }
+            // Only revoke old URLs after all fetches succeed
+            samples.forEach(s => { if (s.blobUrl) URL.revokeObjectURL(s.blobUrl); });
+            samples = newSamples;
 
             renderSamples();
             updateGenerateButton();
@@ -1472,6 +1477,10 @@ function initChatterbox() {
         }
     });
     refRemove.addEventListener('click', () => {
+        if (refAudio.src && refAudio.src.startsWith('blob:')) {
+            URL.revokeObjectURL(refAudio.src);
+        }
+        refAudio.src = '';
         refAudioId = null;
         refPreview.classList.add('hidden');
         uploadZone.classList.remove('hidden');
@@ -1487,6 +1496,9 @@ function initChatterbox() {
             const data = await response.json();
             if (data.error) throw new Error(data.error);
             refAudioId = data.id;
+            if (refAudio.src && refAudio.src.startsWith('blob:')) {
+                URL.revokeObjectURL(refAudio.src);
+            }
             refAudio.src = URL.createObjectURL(file);
             refPreview.classList.remove('hidden');
             uploadZone.classList.add('hidden');

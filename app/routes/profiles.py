@@ -286,40 +286,43 @@ def import_profile():
             profile_audio_dir = os.path.join(profiles_dir, new_id)
             os.makedirs(profile_audio_dir, exist_ok=True)
 
-            # Extract and rename audio files
-            new_samples = []
-            for sample in profile_data.get('samples', []):
-                sample_id = sample.get('id', '')
-                # Validate sample ID is safe (no path components)
-                if not sample_id or '/' in sample_id or '\\' in sample_id or '..' in sample_id:
-                    continue
-                old_audio_name = f"audio/{sample_id}.wav"
-                if old_audio_name in zf.namelist():
-                    new_sample_id = str(uuid.uuid4())
-                    audio_data = zf.read(old_audio_name)
-                    new_audio_path = os.path.join(profile_audio_dir, f"{new_sample_id}.wav")
-                    with open(new_audio_path, 'wb') as f:
-                        f.write(audio_data)
-                    new_samples.append({
-                        'id': new_sample_id,
-                        'transcript': str(sample.get('transcript', ''))[:1000],
-                    })
+            try:
+                # Extract and rename audio files
+                new_samples = []
+                for sample in profile_data.get('samples', []):
+                    sample_id = sample.get('id', '')
+                    if not sample_id or not is_valid_uuid(sample_id):
+                        continue
+                    old_audio_name = f"audio/{sample_id}.wav"
+                    if old_audio_name in zf.namelist():
+                        new_sample_id = str(uuid.uuid4())
+                        audio_data = zf.read(old_audio_name)
+                        new_audio_path = os.path.join(profile_audio_dir, f"{new_sample_id}.wav")
+                        with open(new_audio_path, 'wb') as f:
+                            f.write(audio_data)
+                        new_samples.append({
+                            'id': new_sample_id,
+                            'transcript': str(sample.get('transcript', ''))[:1000],
+                        })
 
-            if not new_samples:
+                if not new_samples:
+                    shutil.rmtree(profile_audio_dir, ignore_errors=True)
+                    return jsonify({'error': 'No valid samples found in ZIP'}), 400
+
+                # Save new profile metadata
+                new_profile = {
+                    'id': new_id,
+                    'name': profile_data['name'].strip()[:200] + ' (imported)',
+                    'samples': new_samples,
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                }
+
+                filepath = os.path.join(profiles_dir, f"{new_id}.json")
+                with open(filepath, 'w') as f:
+                    json.dump(new_profile, f, indent=2)
+            except Exception:
                 shutil.rmtree(profile_audio_dir, ignore_errors=True)
-                return jsonify({'error': 'No valid samples found in ZIP'}), 400
-
-            # Save new profile metadata
-            new_profile = {
-                'id': new_id,
-                'name': profile_data['name'].strip()[:200] + ' (imported)',
-                'samples': new_samples,
-                'created_at': datetime.now(timezone.utc).isoformat(),
-            }
-
-            filepath = os.path.join(profiles_dir, f"{new_id}.json")
-            with open(filepath, 'w') as f:
-                json.dump(new_profile, f, indent=2)
+                raise
 
             return jsonify({
                 'id': new_id,
