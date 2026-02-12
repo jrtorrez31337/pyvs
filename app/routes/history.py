@@ -59,6 +59,9 @@ def add_history():
     if data is None:
         return jsonify({'error': 'Invalid JSON'}), 400
 
+    if not data.get('mode') or not data.get('text'):
+        return jsonify({'error': 'mode and text are required'}), 400
+
     audio_id = data.get('audio_id')
 
     item = {
